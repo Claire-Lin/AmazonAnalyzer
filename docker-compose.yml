@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    container_name: amazon-analyzer-db
+    environment:
+      POSTGRES_DB: amazon_analyzer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for caching (optional but recommended)
+  redis:
+    image: redis:7-alpine
+    container_name: amazon-analyzer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: amazon-analyzer-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/amazon_analyzer
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SCRAPER_HEADLESS=true
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: amazon-analyzer-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    restart: unless-stopped
+    command: npm run dev
+
+  # Playwright Browser (for web scraping)
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.40.0-focal
+    container_name: amazon-analyzer-playwright
+    environment:
+      - DISPLAY=:99
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    command: tail -f /dev/null  # Keep container running
+    profiles:
+      - tools  # Optional profile for dedicated scraping service
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: amazon-analyzer-network

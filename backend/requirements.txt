@@ -1,0 +1,37 @@
+# FastAPI and web framework dependencies
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
+# Pydantic for data validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Database dependencies
+sqlalchemy>=2.0.23
+psycopg2-binary>=2.9.9
+
+# LangChain and AI dependencies
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+
+# Web scraping dependencies
+playwright>=1.40.0
+beautifulsoup4>=4.12.2
+requests>=2.31.0
+
+# Utility dependencies
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+typing-extensions>=4.8.0
+
+# JSON and data handling
+ujson>=5.8.0
+
+# HTTP client
+httpx>=0.25.2
+
+# Environment and configuration
+click>=8.1.7

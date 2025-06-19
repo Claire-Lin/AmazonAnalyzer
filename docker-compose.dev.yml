@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # Backend API only (no database for development)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: amazon-analyzer-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./amazon_analyzer.db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SCRAPER_HEADLESS=true
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: amazon-analyzer-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    restart: unless-stopped
+    command: npm run dev
+
+networks:
+  default:
+    name: amazon-analyzer-dev-network

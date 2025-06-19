@@ -1,0 +1,16 @@
+# Essential packages only for Docker build
+fastapi
+uvicorn[standard]
+websockets
+pydantic
+sqlalchemy
+psycopg2-binary
+python-dotenv
+python-multipart
+typing-extensions
+requests
+playwright
+langchain
+langchain-openai
+langgraph
+langchain-core
