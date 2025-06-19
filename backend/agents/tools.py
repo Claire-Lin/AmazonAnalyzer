@@ -68,25 +68,12 @@ async def amazon_scraper_async(url_or_asin: str, session_id: Optional[str] = Non
         scraper = AmazonScraper(headless=True)
         product_data = await scraper.scrape_product_async(url_or_asin)
         
-        # If scraping failed completely, provide mock data for testing
+        # If scraping failed completely, return error information
         if not product_data.get('title') and not product_data.get('success', True):
-            print("⚠️ Scraping failed, using mock data for testing")
-            product_data = {
-                'title': 'Tamagotchi Nano x Peanuts Snoopy with Silicone Case',
-                'price': 29.99,
-                'currency': 'USD',
-                'brand': 'Tamagotchi',
-                'asin': 'B0FB7FQWJL',
-                'description': 'Tamagotchi Nano collaboration with Peanuts featuring Snoopy. Includes protective silicone case.',
-                'spec': 'Dimensions: 1.6 x 1.4 x 0.5 inches | Battery: CR2032 | Age: 8+ years',
-                'reviews': [
-                    'Great nostalgic toy with modern updates',
-                    'Love the Snoopy theme and the case is a nice bonus',
-                    'Battery life could be better but overall fun product'
-                ],
-                'success': True,
-                'mock_data': True
-            }
+            print("⚠️ Scraping failed, unable to extract product data")
+            # Return the actual failed scraping result instead of mock data
+            if not product_data.get('success', True):
+                pass  # Keep the original error result
         
         # Send completion notification
         if websocket_manager and session_id:
@@ -192,53 +179,75 @@ async def amazon_search_async(keyword: str, k: int = 5, session_id: Optional[str
 
 def amazon_scraper(url_or_asin: str, session_id: Optional[str] = None) -> str:
     """
-    Sync wrapper for amazon_scraper_async.
-    Scrape Amazon product data.
+    Scrape Amazon product data using requests-based scraper.
     Input: Amazon URL or ASIN
     Returns: JSON string with title, price, specs, and reviews
     """
-    try:
-        # Check if we're in an async context
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 amazon_scraper - Retrieved session_id from context: {session_id}")
+    
+    # Send WebSocket notification
+    print(f"🔍 amazon_scraper - session_id: {session_id}, websocket_manager: {websocket_manager is not None}")
+    if websocket_manager and session_id:
         try:
-            # If there's already an event loop, we can't use asyncio.run
-            asyncio.get_running_loop()
-            # We're in an async context, but this function needs to be sync for LangGraph
-            # Use a thread to run the async function
-            import threading
-            import queue
-            
-            result_queue = queue.Queue()
-            
-            def run_async():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(amazon_scraper_async(url_or_asin, session_id))
-                    result_queue.put(('success', result))
-                except Exception as e:
-                    result_queue.put(('error', str(e)))
-                finally:
-                    loop.close()
-            
-            thread = threading.Thread(target=run_async)
-            thread.start()
-            thread.join(timeout=120)  # 2 minute timeout
-            
-            if not result_queue.empty():
-                status, result = result_queue.get()
-                if status == 'success':
-                    return result
-                else:
-                    raise Exception(result)
-            else:
-                raise Exception("Scraper thread timed out")
-                
-        except RuntimeError:
-            # No event loop running, we can use asyncio.run directly
-            return asyncio.run(amazon_scraper_async(url_or_asin, session_id))
-            
+            send_websocket_notification_sync(
+                websocket_manager=websocket_manager,
+                session_id=session_id,
+                agent_name="data_collector",
+                status="working",
+                progress=0.2,
+                current_task="Scraping product data",
+                thinking_step=f"Extracting product information from {url_or_asin}..."
+            )
+        except Exception as e:
+            print(f"WebSocket notification failed: {e}")
+    
+    print(f"Scraping Amazon product data for: {url_or_asin}")
+    try:
+        scraper = AmazonScraper(headless=True)
+        product_data = scraper.scrape_product(url_or_asin)
+        
+        # If scraping failed completely, return error information
+        if not product_data.get('title') and not product_data.get('success', True):
+            print("⚠️ Scraping failed, unable to extract product data")
+            # Return the actual failed scraping result instead of mock data
+            if not product_data.get('success', True):
+                pass  # Keep the original error result
+        
+        # Send completion notification
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="data_collector",
+                    status="working",
+                    progress=0.4,
+                    current_task="Product data extracted",
+                    thinking_step=f"Successfully scraped: {product_data.get('title', 'Unknown product')}"
+                )
+            except Exception as e:
+                print(f"WebSocket notification failed: {e}")
+        
+        return json.dumps(product_data, indent=2)
     except Exception as e:
-        print(f"Error in amazon_scraper sync wrapper: {e}")
+        # Send error notification
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="data_collector",
+                    status="error",
+                    progress=0.0,
+                    current_task="Scraping failed",
+                    error_message=f"Failed to scrape product: {str(e)}"
+                )
+            except Exception as ws_e:
+                print(f"WebSocket notification failed: {ws_e}")
+        
         return json.dumps({
             "error": f"Failed to scrape Amazon product: {str(e)}",
             "success": False,
@@ -296,6 +305,67 @@ def amazon_search(keyword: str, k: int = 5, session_id: Optional[str] = None) ->
     except Exception as e:
         print(f"Error in amazon_search sync wrapper: {e}")
         return f"Error searching Amazon: {str(e)}"
+
+
+def amazon_search_sequential(keywords_list: str, k: int = 5, session_id: Optional[str] = None) -> str:
+    """
+    Sequential Amazon search for multiple keywords.
+    Input: Comma-separated list of keywords (e.g., "laptop stand,laptop cooling pad,laptop riser")
+    Returns: Combined results from all searches
+    
+    This tool ensures searches are done one at a time to avoid rate limiting.
+    """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+    
+    # Parse keywords
+    keywords = [kw.strip() for kw in keywords_list.split(',')]
+    
+    all_results = []
+    all_urls = []
+    
+    print(f"📋 Sequential search for {len(keywords)} keywords")
+    
+    for i, keyword in enumerate(keywords):
+        print(f"\n🔍 Search {i+1}/{len(keywords)}: '{keyword}'")
+        
+        # Send progress notification
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="data_collector",
+                    status="working",
+                    progress=0.6 + (0.2 * i / len(keywords)),
+                    current_task=f"Searching competitors ({i+1}/{len(keywords)})",
+                    thinking_step=f"Searching Amazon for '{keyword}'..."
+                )
+            except Exception as e:
+                print(f"WebSocket notification failed: {e}")
+        
+        # Execute search
+        result = amazon_search(keyword, k, session_id)
+        
+        # Collect results
+        if result and "Error" not in result:
+            urls = result.strip().split('\n')
+            all_urls.extend(urls)
+            all_results.append(f"Search '{keyword}': {len(urls)} results")
+        else:
+            all_results.append(f"Search '{keyword}': Failed - {result}")
+        
+        # Add delay between searches (already in search function, but ensure minimum gap)
+        if i < len(keywords) - 1:
+            import time
+            time.sleep(1)
+    
+    # Compile results
+    summary = "\n".join(all_results)
+    unique_urls = list(dict.fromkeys(all_urls))  # Remove duplicates while preserving order
+    
+    return f"Sequential Search Summary:\n{summary}\n\nAll URLs Found ({len(unique_urls)} unique):\n" + "\n".join(unique_urls)
 
 def product_analysis(product_info: str, session_id: Optional[str] = None) -> str:
     """
@@ -367,6 +437,13 @@ def competitor_analysis(main_product_info: str, *competitor_infos: str, session_
     Input: Main product info and multiple competitor infos (strings)
     Returns: Competitor analysis result (string)
     """
+    # Debug logging
+    print(f"🔍 competitor_analysis called with:")
+    print(f"   - main_product_info length: {len(main_product_info) if main_product_info else 0}")
+    print(f"   - competitor_infos count: {len(competitor_infos)}")
+    for i, comp in enumerate(competitor_infos):
+        print(f"   - competitor {i+1} length: {len(comp) if comp else 0}")
+    
     # Send WebSocket notification
     if websocket_manager and session_id:
         try:
@@ -386,6 +463,9 @@ def competitor_analysis(main_product_info: str, *competitor_infos: str, session_
     try:
         # Get analysis prompt from prompts module
         analysis_prompt = get_competitor_analysis_prompt(main_product_info, competitor_infos)
+        
+        # Debug: show what we're sending to the LLM
+        print(f"📝 Competitor analysis prompt preview: {analysis_prompt[:200]}...")
 
         # Get analysis from LLM
         response = llm.invoke(analysis_prompt)
@@ -495,6 +575,11 @@ def product_optimizer(main_product_info: str, market_positioning_suggestions: st
     Input: Main product info and market positioning suggestions
     Returns: Product optimization strategy (string)
     """
+    # Debug logging
+    print(f"🔍 product_optimizer called with:")
+    print(f"   - main_product_info length: {len(main_product_info) if main_product_info else 0}")
+    print(f"   - market_positioning_suggestions length: {len(market_positioning_suggestions) if market_positioning_suggestions else 0}")
+    
     # Send WebSocket notification
     if websocket_manager and session_id:
         try:
@@ -514,6 +599,9 @@ def product_optimizer(main_product_info: str, market_positioning_suggestions: st
     try:
         # Get optimization prompt from prompts module
         optimization_prompt = get_product_optimizer_prompt(main_product_info, market_positioning_suggestions)
+        
+        # Debug: show what we're sending to the LLM
+        print(f"📝 Optimization prompt preview: {optimization_prompt[:200]}...")
 
         # Get optimization strategy from LLM
         response = llm.invoke(optimization_prompt)

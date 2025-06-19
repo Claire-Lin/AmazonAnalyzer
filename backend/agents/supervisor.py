@@ -64,9 +64,18 @@ def create_supervisor_workflow():
             set_session_id(session_id)
             print(f"✅ Set session_id in context: {session_id}")
         
-        # Invoke the data collector agent
+        # Invoke the data collector agent with clear completion criteria
         result = data_collector_agent.invoke({
-            "messages": [{"role": "user", "content": f"Scrape and analyze this Amazon product, then find 3-5 competitors: {amazon_url}"}]
+            "messages": [{"role": "user", "content": f"""Analyze this Amazon product and collect competitor data: {amazon_url}
+
+CRITICAL: Make sure to COMPLETE ALL STEPS before finishing:
+1. Scrape the main product data
+2. Generate relevant search keywords
+3. Use amazon_search_sequential to find competitors
+4. Scrape at least 3-5 competitor products
+5. Format output with clear sections as specified
+
+Do NOT finish until you have attempted to scrape competitor data. Even if scraping fails, include the attempt results."""}]
         })
         
         # Extract data from result - handle both dict and AIMessage objects
@@ -81,11 +90,75 @@ def create_supervisor_workflow():
         else:
             final_message = str(result)
         
+        # Parse competitor data from the response
+        competitor_data = []
+        
+        # Look for competitor data sections in the response
+        if "Competitor Data:" in final_message:
+            lines = final_message.split('\n')
+            capturing = False
+            current_competitor = ""
+            
+            for line in lines:
+                if "Competitor Data:" in line:
+                    capturing = True
+                    continue
+                elif capturing:
+                    # Look for competitor separators or new sections
+                    if line.strip().startswith('Competitor ') or "scraping result:" in line.lower():
+                        if current_competitor:
+                            competitor_data.append(current_competitor.strip())
+                        current_competitor = line
+                    elif capturing and line.strip():
+                        current_competitor += "\n" + line
+                    elif not line.strip() and current_competitor:
+                        # Empty line might indicate end of competitor
+                        continue
+                    
+                    # Stop capturing if we hit another major section
+                    if any(x in line for x in ["Search Keywords", "OUTPUT FORMAT", "WORKFLOW"]):
+                        if current_competitor:
+                            competitor_data.append(current_competitor.strip())
+                        break
+            
+            # Add the last competitor if exists
+            if current_competitor and current_competitor not in competitor_data:
+                competitor_data.append(current_competitor.strip())
+        
+        # If no structured competitor data found, try to extract from JSON-like structure
+        if not competitor_data and "{" in final_message:
+            import re
+            # Look for JSON blocks that might contain competitor info
+            json_blocks = re.findall(r'\{[^}]*"title"[^}]*\}', final_message)
+            for block in json_blocks:
+                try:
+                    import json
+                    data = json.loads(block)
+                    if data.get('title') and data.get('success'):
+                        title = data.get('title', 'Unknown')
+                        price = data.get('price', 'N/A')
+                        brand = data.get('brand', 'Unknown')
+                        competitor_data.append(f"Product: {title} | Price: ${price} | Brand: {brand}")
+                except:
+                    continue
+        
+        # Validate that we have attempted competitor collection
+        has_competitor_attempt = any([
+            "Competitor Data:" in final_message,
+            "competitor" in final_message.lower(),
+            "search" in final_message.lower(),
+            len(competitor_data) > 0
+        ])
+        
+        if not has_competitor_attempt:
+            print("⚠️ Data collector may not have completed competitor search - proceeding anyway")
+        
         # Update state
         state["main_product_data"] = final_message
-        state["competitor_data"] = []  # Would be populated from actual agent response
+        state["competitor_data"] = competitor_data if competitor_data else ["No competitor data found"]
         state["next_agent"] = "market_analyzer"
         
+        print(f"✅ Data collector completed - Found {len(competitor_data)} competitors")
         return state
     
     def market_analyzer_node(state: AnalysisState) -> AnalysisState:
@@ -108,7 +181,18 @@ def create_supervisor_workflow():
         
         # Get competitor data for the analysis
         competitor_data = state.get("competitor_data", [])
+        
+        # Debug logging
+        print(f"🔍 Market analyzer - competitor_data count: {len(competitor_data)}")
+        for i, comp in enumerate(competitor_data):
+            print(f"   - competitor {i+1}: {comp[:100] if comp else 'None'}...")
+        
         competitor_info = "\n\n".join([f"Competitor {i+1}:\n{data}" for i, data in enumerate(competitor_data) if data])
+        
+        # Debug what we're sending
+        print(f"📝 Sending to market analyzer:")
+        print(f"   - main product length: {len(main_product_data)}")
+        print(f"   - competitor info length: {len(competitor_info)}")
         
         # Invoke the market analyzer agent with clear instructions
         result = market_analyzer_agent.invoke({
@@ -176,11 +260,26 @@ Make sure to call BOTH tools to provide separate analyses."""}],
                         competitor_analysis_result = "Competitor analysis not available - agent may not have called the competitor_analysis tool"
                         break
         
+        # Validate that we have completed both analyses
+        has_product_analysis = bool(product_analysis_result and len(product_analysis_result) > 50)
+        has_competitor_analysis = bool(competitor_analysis_result and len(competitor_analysis_result) > 50)
+        
+        # Debug logging
+        print(f"🔍 Market analyzer completion check:")
+        print(f"   - Product analysis: {'✅' if has_product_analysis else '❌'} ({len(product_analysis_result or '')} chars)")
+        print(f"   - Competitor analysis: {'✅' if has_competitor_analysis else '❌'} ({len(competitor_analysis_result or '')} chars)")
+        
+        if not has_product_analysis:
+            print("⚠️ Product analysis appears incomplete or missing")
+        if not has_competitor_analysis:
+            print("⚠️ Competitor analysis appears incomplete or missing")
+        
         # Update state with separated analyses
         state["product_analysis"] = product_analysis_result or "Product analysis not available"
         state["competitor_analysis"] = competitor_analysis_result or "Competitor analysis not available"
         state["next_agent"] = "optimization_advisor"
         
+        print(f"✅ Market analyzer completed - Proceeding to optimization advisor")
         return state
     
     def optimization_advisor_node(state: AnalysisState) -> AnalysisState:
@@ -191,6 +290,21 @@ Make sure to call BOTH tools to provide separate analyses."""}],
         competitor_analysis = state.get("competitor_analysis", "")
         main_product_data = state.get("main_product_data", "")
         session_id = state.get("session_id")
+        
+        # Debug logging
+        print(f"🔍 Optimization advisor inputs:")
+        print(f"   - Product analysis: {len(product_analysis)} chars")
+        print(f"   - Competitor analysis: {len(competitor_analysis)} chars")
+        print(f"   - Main product data: {len(main_product_data)} chars")
+        
+        # Validate we have analysis results to work with
+        has_analyses = bool(product_analysis and competitor_analysis and 
+                           len(product_analysis) > 50 and len(competitor_analysis) > 50)
+        
+        if not has_analyses:
+            print("⚠️ Optimization advisor starting without complete market analysis")
+        else:
+            print("✅ Optimization advisor has complete market analysis data")
         
         # Include product data if analyses are empty
         if not product_analysis and not competitor_analysis:

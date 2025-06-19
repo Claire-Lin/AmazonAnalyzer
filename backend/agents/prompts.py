@@ -67,7 +67,10 @@ def get_competitor_analysis_prompt(main_product_info: str, competitor_infos: tup
     Returns:
         Formatted prompt string for LLM competitor analysis
     """
-    competitors_section = "\n\n".join([f"COMPETITOR {i+1}:\n{info}" for i, info in enumerate(competitor_infos)])
+    if competitor_infos and any(competitor_infos):
+        competitors_section = "\n\n".join([f"COMPETITOR {i+1}:\n{info}" for i, info in enumerate(competitor_infos) if info])
+    else:
+        competitors_section = "No competitor data available for analysis."
     
     return f"""
     You are an expert competitive intelligence analyst for Amazon marketplace. Analyze the main product against its competitors and provide a comprehensive competitive analysis.

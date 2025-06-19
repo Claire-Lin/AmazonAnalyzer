@@ -165,60 +165,9 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
             thinking_step="Starting multi-agent Amazon product analysis..."
         )
         
-        # Simulate agent progress updates in background
-        async def send_progress_updates():
-            await asyncio.sleep(2)
-            await websocket_manager.send_agent_progress(
-                session_id=session_id,
-                agent_name="data_collector",
-                status="working",
-                progress=0.2,
-                current_task="Collecting product data",
-                thinking_step="Scraping main product and searching for competitors..."
-            )
-            
-            await asyncio.sleep(5)
-            await websocket_manager.send_agent_progress(
-                session_id=session_id,
-                agent_name="data_collector",
-                status="completed",
-                progress=1.0,
-                current_task="Data collection complete",
-                thinking_step="Successfully collected product and competitor data"
-            )
-            
-            await asyncio.sleep(1)
-            await websocket_manager.send_agent_progress(
-                session_id=session_id,
-                agent_name="market_analyzer",
-                status="working",
-                progress=0.5,
-                current_task="Analyzing market position",
-                thinking_step="Comparing product features and pricing..."
-            )
-            
-            await asyncio.sleep(3)
-            await websocket_manager.send_agent_progress(
-                session_id=session_id,
-                agent_name="market_analyzer",
-                status="completed",
-                progress=1.0,
-                current_task="Market analysis complete",
-                thinking_step="Identified key market insights and positioning"
-            )
-            
-            await asyncio.sleep(1)
-            await websocket_manager.send_agent_progress(
-                session_id=session_id,
-                agent_name="optimization_advisor",
-                status="working",
-                progress=0.7,
-                current_task="Generating optimization strategies",
-                thinking_step="Creating actionable recommendations..."
-            )
-        
-        # Start progress updates in background
-        asyncio.create_task(send_progress_updates())
+        # Note: Progress updates are now handled by individual agents and tools
+        # The background progress simulation has been removed to avoid timing conflicts
+        # Real progress is tracked through WebSocket notifications in each agent/tool
         
         # Run the analysis workflow asynchronously to avoid blocking
         from concurrent.futures import ThreadPoolExecutor
