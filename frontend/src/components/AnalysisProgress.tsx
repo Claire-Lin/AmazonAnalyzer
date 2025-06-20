@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, AlertCircle, Clock, Bot, Search, TrendingUp, Lightbulb } from 'lucide-react'
 
 interface AnalysisSession {
@@ -31,6 +32,15 @@ interface AnalysisProgressProps {
 }
 
 export function AnalysisProgress({ session, agentProgress, currentAgent, isAnalyzing }: AnalysisProgressProps) {
+  const activityLogRef = useRef<HTMLDivElement>(null)
+
+  // Auto-scroll to bottom when new messages appear
+  useEffect(() => {
+    if (activityLogRef.current) {
+      activityLogRef.current.scrollTop = activityLogRef.current.scrollHeight
+    }
+  }, [agentProgress])
+
   const getAgentIcon = (agentName: string) => {
     switch (agentName) {
       case 'data_collector':
@@ -170,7 +180,10 @@ export function AnalysisProgress({ session, agentProgress, currentAgent, isAnaly
         {/* Message Timeline */}
         <div className="bg-gray-50 rounded-lg p-4">
           <h3 className="text-sm font-semibold text-gray-700 mb-3">Activity Log</h3>
-          <div className="space-y-2 max-h-96 overflow-y-auto">
+          <div 
+            ref={activityLogRef}
+            className="space-y-2 max-h-96 overflow-y-auto scroll-smooth"
+          >
             {agentProgress.map((message, index) => (
               <div
                 key={`${message.agentName}-${index}-${message.timestamp}`}

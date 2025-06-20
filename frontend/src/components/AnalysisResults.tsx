@@ -67,27 +67,6 @@ export function AnalysisResults({ session, result }: AnalysisResultsProps) {
             </div>
           </div>
         </div>
-        
-        {/* Summary Section */}
-        <div>
-          <h4 className="font-medium text-gray-900 mb-2">Collection Summary</h4>
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="bg-blue-50 p-3 rounded">
-              <div className="flex items-center">
-                <Package className="w-4 h-4 text-blue-500 mr-2" />
-                <span className="text-sm font-medium text-blue-800">Main Product</span>
-              </div>
-              <p className="text-xs text-blue-700 mt-1">Product data scraped and analyzed</p>
-            </div>
-            <div className="bg-green-50 p-3 rounded">
-              <div className="flex items-center">
-                <Target className="w-4 h-4 text-green-500 mr-2" />
-                <span className="text-sm font-medium text-green-800">Competitors</span>
-              </div>
-              <p className="text-xs text-green-700 mt-1">Competitor products identified and scraped</p>
-            </div>
-          </div>
-        </div>
       </div>
     )
   }
