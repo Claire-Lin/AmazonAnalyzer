@@ -21,6 +21,8 @@ def get_product_analysis_prompt(product_info: str) -> str:
     Product Information:
     {product_info}
 
+    IMPORTANT: If the product data is limited due to scraping restrictions or bot detection, work with whatever information is available. Focus on providing actionable insights even with partial data.
+
     Please provide a detailed analysis covering the following aspects:
 
     1. MARKET POSITION ANALYSIS
@@ -56,21 +58,17 @@ def get_product_analysis_prompt(product_info: str) -> str:
     Format your response as a comprehensive business analysis report. Be specific, actionable, and data-driven in your analysis. If certain information is missing, note what additional data would be valuable for a more complete analysis.
     """
 
-def get_competitor_analysis_prompt(main_product_info: str, competitor_infos: tuple) -> str:
+def get_competitor_analysis_prompt(main_product_info: str, competitor_infos: str) -> str:
     """
     Generate a comprehensive competitor analysis prompt.
     
     Args:
         main_product_info: Main product information string to be analyzed
-        competitor_infos: Tuple of competitor product information strings
+        competitor_infos: competitor product information strings
         
     Returns:
         Formatted prompt string for LLM competitor analysis
     """
-    if competitor_infos and any(competitor_infos):
-        competitors_section = "\n\n".join([f"COMPETITOR {i+1}:\n{info}" for i, info in enumerate(competitor_infos) if info])
-    else:
-        competitors_section = "No competitor data available for analysis."
     
     return f"""
     You are an expert competitive intelligence analyst for Amazon marketplace. Analyze the main product against its competitors and provide a comprehensive competitive analysis.
@@ -79,7 +77,9 @@ def get_competitor_analysis_prompt(main_product_info: str, competitor_infos: tup
     {main_product_info}
 
     COMPETITORS:
-    {competitors_section}
+    {competitor_infos}
+
+    IMPORTANT: If competitor data is limited or unavailable due to scraping restrictions, focus on analyzing the main product's market position and provide general competitive insights based on the product category and available information.
 
     Please provide a detailed competitive analysis covering the following aspects:
 

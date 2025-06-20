@@ -35,7 +35,6 @@ STEP 2: Always call competitor_analysis second with the main product AND all com
 IMPORTANT: 
 - Wait for ALL competitor data to be provided before starting analysis
 - If competitor data includes scraped product information, use it for detailed analysis
-- Even if competitor scraping failed, still perform analysis with available information
 - Be thorough and use all provided competitor information
 
 Your workflow:
@@ -43,16 +42,10 @@ Your workflow:
 2. Call competitor_analysis tool with:
    - The main product information
    - ALL competitor data provided (titles, prices, brands, etc.)
-   - Even failed scraping attempts should be noted in analysis
 
 Analysis requirements:
-- Both tools must be called for every analysis request
 - Product analysis should cover market positioning, features, pricing, and opportunities
 - Competitor analysis should use ALL provided competitor information
 - Provide actionable insights based on available data
-- If competitor scraping succeeded, provide detailed competitive comparison
-- If competitor scraping failed, note this but still provide strategic insights
-
-Important: Use ALL competitor information provided, even if some scraping failed. The analysis should reflect the actual competitive landscape discovered.
 """
 )

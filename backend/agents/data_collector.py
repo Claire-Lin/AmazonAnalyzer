@@ -6,9 +6,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 try:
-    from .tools import amazon_scraper, amazon_search_sequential
+    from .tools import amazon_scraper, amazon_search
 except ImportError:
-    from tools import amazon_scraper, amazon_search_sequential
+    from tools import amazon_scraper, amazon_search
 
 # Load environment variables from project root
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -22,33 +22,38 @@ model = ChatOpenAI(
 # Create default instance for backward compatibility
 data_collector_agent = create_react_agent(
     model=model,
-    tools=[amazon_scraper, amazon_search_sequential],
+    tools=[amazon_scraper, amazon_search],
     name="data_collector",
     prompt="""You are a data collection specialist for Amazon product analysis.
 
 Your responsibilities:
-1. Use amazon_scraper to extract product information (title, price, specs, reviews) from Amazon URLs or ASINs
-2. Use amazon_search_sequential to find competitor products based on relevant keywords
+1. Use amazon_scraper to extract product information (title, price, specs, reviews) from Amazon URLs
+2. Use amazon_search to find competitor products based on relevant keywords
 3. Collect comprehensive data for both main product and competitors
 
 WORKFLOW:
 1. First, scrape the main product URL provided by the user using amazon_scraper
-2. Extract key information from the main product (even if scraping fails, note what information is available)
+2. Extract key information from the main product
 3. Generate 3-5 relevant search keywords based on:
    - Product title/name
    - Product category
    - Key features
-4. Use amazon_search_sequential with ALL keywords at once:
+4. Use amazon_search with ALL keywords at once:
    - Create a comma-separated list of keywords
    - Example: "laptop stand,laptop cooling pad,laptop riser"
-   - The tool will search each keyword sequentially and return combined results
+   - The tool will search each keyword and return combined results
 5. After collecting all competitor URLs, scrape the top 3-5 competitors using amazon_scraper
 6. Compile all data into a structured format
 
 EXAMPLE TOOL USAGE:
 If the product is a "Gaming Laptop Stand with RGB", you would:
-1. amazon_scraper("https://amazon.com/dp/B123456")
-2. amazon_search_sequential("gaming laptop stand,laptop cooling stand,RGB laptop stand", 3)
+1. amazon_scraper("https://amazon.com/...")  # Main product only - MUST be URL
+2. amazon_search("gaming laptop stand", 3)  # Search for competitors with 3 results
+3. amazon_search("laptop cooling pad", 3)  # Additional keywords for more results
+... # continue with other keywords
+4. amazon_scraper("https://amazon.com/...") # Competitor URLs from search results
+5. Repeat for each competitor URL found in the search results
+6. Return a structured summary of all collected data
 
 OUTPUT FORMAT:
 Provide a comprehensive summary with the following EXACT structure:
@@ -65,13 +70,11 @@ Competitor 2: [scraped data including title, price, brand]
 Competitor 3: [scraped data including title, price, brand]
 [etc.]
 
-Important:
-- Use amazon_search_sequential with comma-separated keywords for automatic sequential execution
-- Continue even if scraping fails - the search results are still valuable
-- Be explicit about what data was successfully collected vs what failed
-- Format competitor data clearly with "Competitor X:" labels
-- Include key product details (title, price, brand) for each competitor
-- Focus on factual data extraction without analysis
+Output format:
+{
+    "main_product_data": {...},
+    "competitor_data": [competitor1, competitor2, competitor3, ...],
+}
 """
 )
 

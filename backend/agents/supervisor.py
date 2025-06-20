@@ -1,458 +1,534 @@
 import os
-import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Optional, Dict, Any, TypedDict, Annotated
 from datetime import datetime
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import create_react_agent
+from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from typing_extensions import Annotated, TypedDict
+from langchain_core.messages import BaseMessage
 
 try:
+    from .session_context import get_session_id
+    from .websocket_utils import send_websocket_notification_sync
     from .data_collector import data_collector_agent
     from .market_analyzer import market_analyzer_agent
     from .optimization_advisor import optimization_advisor_agent
 except ImportError:
+    from session_context import get_session_id
+    from websocket_utils import send_websocket_notification_sync
     from data_collector import data_collector_agent
     from market_analyzer import market_analyzer_agent
     from optimization_advisor import optimization_advisor_agent
+
 # Load environment variables from project root
-from dotenv import load_dotenv
-import os
-# Load from project root
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(env_path)
+print(f"Supervisor OPENAI_API_KEY loaded: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No'}")
 
-# State management for LangGraph workflow
-class AnalysisState(TypedDict):
-    messages: Annotated[List, add_messages]
-    amazon_url: str
-    main_product_data: Optional[str]
-    competitor_data: Optional[List[str]]
-    product_analysis: Optional[str]
-    competitor_analysis: Optional[str]
-    market_positioning: Optional[str]
-    optimization_strategy: Optional[str]
-    next_agent: Optional[str]
+# Import WebSocket manager for real-time updates
+try:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from services.websocket_manager import websocket_manager
+except ImportError:
+    websocket_manager = None
+
+# Initialize model
+model = ChatOpenAI(
+    model="gpt-4o",
+    api_key=os.getenv("OPENAI_API_KEY"),
+    temperature=0.1
+)
+
+# Define the state schema for the supervisor workflow
+class SupervisorState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    product_url: str
     session_id: Optional[str]
+    collected_data: Optional[str]
+    market_analysis: Optional[str]
+    optimization_results: Optional[str]
+    workflow_status: str
+    current_phase: str
+    error_message: Optional[str]
 
-def create_supervisor_workflow():
-    """Create a LangGraph-based supervisor workflow"""
+class AmazonAnalysisSupervisor:
+    """
+    LangGraph-based supervisor agent that orchestrates the complete Amazon product analysis workflow.
     
-    # Initialize the model
-    model = ChatOpenAI(
-        model="gpt-4o",
-        api_key=os.getenv("OPENAI_API_KEY"),
-        temperature=0.3
-    )
+    Workflow:
+    1. Data Collection: data_collector_agent
+    2. Market Analysis: market_analyzer_agent  
+    3. Optimization Advisory: optimization_advisor_agent
+    """
     
-    # Define agent nodes
-    def data_collector_node(state: AnalysisState) -> AnalysisState:
-        """Data collection agent node"""
-        print("🔍 Data Collector Agent: Starting product data collection...")
+    def __init__(self, session_id: Optional[str] = None):
+        self.session_id = session_id or get_session_id()
+        self.graph = self._build_graph()
+    
+    def _send_notification(self, session_id: str, status: str, progress: float, 
+                          current_task: str, thinking_step: str = "", error_message: str = ""):
+        """Send WebSocket notification if available"""
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="supervisor",
+                    status=status,
+                    progress=progress,
+                    current_task=current_task,
+                    thinking_step=thinking_step,
+                    error_message=error_message
+                )
+            except Exception as e:
+                print(f"WebSocket notification failed: {e}")
+    
+    
+    def data_collection_node(self, state: SupervisorState) -> SupervisorState:
+        """Node 1: Data Collection Phase"""
+        print("="*80)
+        print("PHASE 1: DATA COLLECTION")
+        print("="*80)
         
-        # Get the Amazon URL from state
-        amazon_url = state.get("amazon_url", "")
-        session_id = state.get("session_id")
+        session_id = state.get("session_id", self.session_id)
+        product_url = state["product_url"]
         
-        # Set session context for WebSocket notifications
+        self._send_notification(
+            session_id=session_id,
+            status="working",
+            progress=0.1,
+            current_task="Starting data collection",
+            thinking_step=f"Analyzing product: {product_url}"
+        )
+        
         try:
-            from .session_context import set_session_id
-        except ImportError:
-            from session_context import set_session_id
-        
-        if session_id:
-            set_session_id(session_id)
-            print(f"✅ Set session_id in context: {session_id}")
-        
-        # Invoke the data collector agent with clear completion criteria
-        result = data_collector_agent.invoke({
-            "messages": [{"role": "user", "content": f"""Analyze this Amazon product and collect competitor data: {amazon_url}
-
-CRITICAL: Make sure to COMPLETE ALL STEPS before finishing:
-1. Scrape the main product data
-2. Generate relevant search keywords
-3. Use amazon_search_sequential to find competitors
-4. Scrape at least 3-5 competitor products
-5. Format output with clear sections as specified
-
-Do NOT finish until you have attempted to scrape competitor data. Even if scraping fails, include the attempt results."""}]
-        })
-        
-        # Extract data from result - handle both dict and AIMessage objects
-        if hasattr(result, 'get') and result.get("messages"):
-            last_message = result["messages"][-1]
-            if hasattr(last_message, 'content'):
-                final_message = last_message.content
-            elif isinstance(last_message, dict):
-                final_message = last_message.get("content", "")
+            print(f"Collecting data for: {product_url}")
+            
+            # Run data collector agent
+            agent_response = data_collector_agent.invoke({
+                "messages": [{"role": "user", "content": product_url}]
+            })
+            
+            # Extract the final message content
+            collected_data = ""
+            if agent_response and "messages" in agent_response:
+                for msg in agent_response["messages"]:
+                    if hasattr(msg, 'content') and msg.content:
+                        collected_data = msg.content
+            
+            if collected_data:
+                self._send_notification(
+                    session_id=session_id,
+                    status="working",
+                    progress=0.33,
+                    current_task="Data collection complete",
+                    thinking_step="Successfully collected main product and competitor data"
+                )
+                print(f"✅ Data collection successful ({len(collected_data)} characters)")
+                
+                return {
+                    **state,
+                    "collected_data": collected_data,
+                    "current_phase": "data_collection_complete",
+                    "workflow_status": "data_collection_success"
+                }
             else:
-                final_message = str(last_message)
-        else:
-            final_message = str(result)
-        
-        # Parse competitor data from the response
-        competitor_data = []
-        
-        # Look for competitor data sections in the response
-        if "Competitor Data:" in final_message:
-            lines = final_message.split('\n')
-            capturing = False
-            current_competitor = ""
+                raise Exception("No data collected from data_collector_agent")
+                
+        except Exception as e:
+            error_msg = f"Data collection failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            self._send_notification(
+                session_id=session_id,
+                status="error",
+                progress=0.0,
+                current_task="Data collection failed",
+                error_message=error_msg
+            )
             
-            for line in lines:
-                if "Competitor Data:" in line:
-                    capturing = True
-                    continue
-                elif capturing:
-                    # Look for competitor separators or new sections
-                    if line.strip().startswith('Competitor ') or "scraping result:" in line.lower():
-                        if current_competitor:
-                            competitor_data.append(current_competitor.strip())
-                        current_competitor = line
-                    elif capturing and line.strip():
-                        current_competitor += "\n" + line
-                    elif not line.strip() and current_competitor:
-                        # Empty line might indicate end of competitor
-                        continue
-                    
-                    # Stop capturing if we hit another major section
-                    if any(x in line for x in ["Search Keywords", "OUTPUT FORMAT", "WORKFLOW"]):
-                        if current_competitor:
-                            competitor_data.append(current_competitor.strip())
-                        break
-            
-            # Add the last competitor if exists
-            if current_competitor and current_competitor not in competitor_data:
-                competitor_data.append(current_competitor.strip())
-        
-        # If no structured competitor data found, try to extract from JSON-like structure
-        if not competitor_data and "{" in final_message:
-            import re
-            # Look for JSON blocks that might contain competitor info
-            json_blocks = re.findall(r'\{[^}]*"title"[^}]*\}', final_message)
-            for block in json_blocks:
-                try:
-                    import json
-                    data = json.loads(block)
-                    if data.get('title') and data.get('success'):
-                        title = data.get('title', 'Unknown')
-                        price = data.get('price', 'N/A')
-                        brand = data.get('brand', 'Unknown')
-                        competitor_data.append(f"Product: {title} | Price: ${price} | Brand: {brand}")
-                except:
-                    continue
-        
-        # Validate that we have attempted competitor collection
-        has_competitor_attempt = any([
-            "Competitor Data:" in final_message,
-            "competitor" in final_message.lower(),
-            "search" in final_message.lower(),
-            len(competitor_data) > 0
-        ])
-        
-        if not has_competitor_attempt:
-            print("⚠️ Data collector may not have completed competitor search - proceeding anyway")
-        
-        # Update state
-        state["main_product_data"] = final_message
-        state["competitor_data"] = competitor_data if competitor_data else ["No competitor data found"]
-        state["next_agent"] = "market_analyzer"
-        
-        print(f"✅ Data collector completed - Found {len(competitor_data)} competitors")
-        return state
+            return {
+                **state,
+                "current_phase": "data_collection_failed",
+                "workflow_status": "failed",
+                "error_message": error_msg
+            }
     
-    def market_analyzer_node(state: AnalysisState) -> AnalysisState:
-        """Market analysis agent node"""
-        print("📊 Market Analyzer Agent: Analyzing market position and competitors...")
+    def market_analysis_node(self, state: SupervisorState) -> SupervisorState:
+        """Node 2: Market Analysis Phase"""
+        print("\n" + "="*80)
+        print("PHASE 2: MARKET ANALYSIS")
+        print("="*80)
         
-        main_product_data = state.get("main_product_data", "")
-        session_id = state.get("session_id")
+        session_id = state.get("session_id", self.session_id)
+        collected_data = state["collected_data"]
         
-        # Parse the product data if it's a JSON string
+        self._send_notification(
+            session_id=session_id,
+            status="working",
+            progress=0.4,
+            current_task="Starting market analysis",
+            thinking_step="Analyzing product positioning and competitive landscape"
+        )
+        
         try:
-            if isinstance(main_product_data, str) and main_product_data.startswith('{'):
-                import json
-                product_dict = json.loads(main_product_data)
-                product_summary = f"Product: {product_dict.get('title', 'Unknown')} | Price: ${product_dict.get('price', 'N/A')} | Brand: {product_dict.get('brand', 'Unknown')} | ASIN: {product_dict.get('asin', 'Unknown')}"
+            print("Running market analysis...")
+            
+            # Prepare clear instructions for market analyzer
+            analysis_instruction = f"""
+Please perform comprehensive market analysis on the following data:
+
+1. First, call product_analysis tool with the main product data
+2. Then, call competitor_analysis tool with main product and competitor data
+
+Data to analyze:
+{collected_data}
+
+Please execute both analysis tools to provide complete market insights.
+"""
+            
+            # Run market analyzer agent
+            agent_response = market_analyzer_agent.invoke({
+                "messages": [{"role": "user", "content": analysis_instruction}]
+            })
+            
+            # Extract the final message content
+            market_analysis = ""
+            if agent_response and "messages" in agent_response:
+                for msg in agent_response["messages"]:
+                    if hasattr(msg, 'content') and msg.content:
+                        market_analysis = msg.content
+            
+            if market_analysis:
+                self._send_notification(
+                    session_id=session_id,
+                    status="working",
+                    progress=0.66,
+                    current_task="Market analysis complete",
+                    thinking_step="Generated product and competitor analysis"
+                )
+                print(f"✅ Market analysis successful ({len(market_analysis)} characters)")
+                
+                return {
+                    **state,
+                    "market_analysis": market_analysis,
+                    "current_phase": "market_analysis_complete",
+                    "workflow_status": "market_analysis_success"
+                }
             else:
-                product_summary = main_product_data
-        except:
-            product_summary = main_product_data
-        
-        # Get competitor data for the analysis
-        competitor_data = state.get("competitor_data", [])
-        
-        # Debug logging
-        print(f"🔍 Market analyzer - competitor_data count: {len(competitor_data)}")
-        for i, comp in enumerate(competitor_data):
-            print(f"   - competitor {i+1}: {comp[:100] if comp else 'None'}...")
-        
-        competitor_info = "\n\n".join([f"Competitor {i+1}:\n{data}" for i, data in enumerate(competitor_data) if data])
-        
-        # Debug what we're sending
-        print(f"📝 Sending to market analyzer:")
-        print(f"   - main product length: {len(main_product_data)}")
-        print(f"   - competitor info length: {len(competitor_info)}")
-        
-        # Invoke the market analyzer agent with clear instructions
-        result = market_analyzer_agent.invoke({
-            "messages": [{"role": "user", "content": f"""Please perform a comprehensive market analysis:
-
-1. First, use the product_analysis tool to analyze the main product's market position:
-{main_product_data}
-
-2. Then, use the competitor_analysis tool to compare the main product against these competitors:
-Main Product:
-{main_product_data}
-
-Competitors:
-{competitor_info if competitor_info else "No competitor data available"}
-
-Make sure to call BOTH tools to provide separate analyses."""}],
-            "session_id": session_id
-        })
-        
-        # Extract messages from the agent's response
-        product_analysis_result = None
-        competitor_analysis_result = None
-        
-        if hasattr(result, 'get') and result.get("messages"):
-            # Get all message content
-            all_content = []
-            for message in result["messages"]:
-                if hasattr(message, 'content'):
-                    all_content.append(message.content)
-                elif isinstance(message, dict):
-                    all_content.append(message.get("content", ""))
+                raise Exception("No analysis results from market_analyzer_agent")
+                
+        except Exception as e:
+            error_msg = f"Market analysis failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            self._send_notification(
+                session_id=session_id,
+                status="error",
+                progress=0.33,
+                current_task="Market analysis failed",
+                error_message=error_msg
+            )
             
-            # Join all content and look for our markers
-            full_text = "\n".join(all_content)
-            
-            # Extract product analysis
-            if "## Product Analysis" in full_text:
-                parts = full_text.split("## Product Analysis", 1)
-                if len(parts) > 1:
-                    # Find the next section or end
-                    product_part = parts[1]
-                    if "## Competitor Analysis" in product_part:
-                        product_analysis_result = product_part.split("## Competitor Analysis")[0].strip()
-                    else:
-                        product_analysis_result = product_part.strip()
-            
-            # Extract competitor analysis
-            if "## Competitor Analysis" in full_text:
-                parts = full_text.split("## Competitor Analysis", 1)
-                if len(parts) > 1:
-                    competitor_analysis_result = parts[1].strip()
-            
-            # Fallback if we didn't find the markers
-            if not product_analysis_result and not competitor_analysis_result:
-                # Use the last substantial message
-                for message in reversed(result["messages"]):
-                    content = ""
-                    if hasattr(message, 'content'):
-                        content = message.content
-                    elif isinstance(message, dict):
-                        content = message.get("content", "")
-                    
-                    if len(content) > 100:  # Skip short messages
-                        product_analysis_result = content
-                        competitor_analysis_result = "Competitor analysis not available - agent may not have called the competitor_analysis tool"
-                        break
-        
-        # Validate that we have completed both analyses
-        has_product_analysis = bool(product_analysis_result and len(product_analysis_result) > 50)
-        has_competitor_analysis = bool(competitor_analysis_result and len(competitor_analysis_result) > 50)
-        
-        # Debug logging
-        print(f"🔍 Market analyzer completion check:")
-        print(f"   - Product analysis: {'✅' if has_product_analysis else '❌'} ({len(product_analysis_result or '')} chars)")
-        print(f"   - Competitor analysis: {'✅' if has_competitor_analysis else '❌'} ({len(competitor_analysis_result or '')} chars)")
-        
-        if not has_product_analysis:
-            print("⚠️ Product analysis appears incomplete or missing")
-        if not has_competitor_analysis:
-            print("⚠️ Competitor analysis appears incomplete or missing")
-        
-        # Update state with separated analyses
-        state["product_analysis"] = product_analysis_result or "Product analysis not available"
-        state["competitor_analysis"] = competitor_analysis_result or "Competitor analysis not available"
-        state["next_agent"] = "optimization_advisor"
-        
-        print(f"✅ Market analyzer completed - Proceeding to optimization advisor")
-        return state
+            return {
+                **state,
+                "current_phase": "market_analysis_failed",
+                "workflow_status": "failed",
+                "error_message": error_msg
+            }
     
-    def optimization_advisor_node(state: AnalysisState) -> AnalysisState:
-        """Optimization advisor agent node"""
-        print("🎯 Optimization Advisor Agent: Generating optimization strategy...")
+    def optimization_advisory_node(self, state: SupervisorState) -> SupervisorState:
+        """Node 3: Optimization Advisory Phase"""
+        print("\n" + "="*80)
+        print("PHASE 3: OPTIMIZATION ADVISORY")
+        print("="*80)
         
-        product_analysis = state.get("product_analysis", "")
-        competitor_analysis = state.get("competitor_analysis", "")
-        main_product_data = state.get("main_product_data", "")
-        session_id = state.get("session_id")
+        session_id = state.get("session_id", self.session_id)
+        collected_data = state["collected_data"]
+        market_analysis = state["market_analysis"]
         
-        # Debug logging
-        print(f"🔍 Optimization advisor inputs:")
-        print(f"   - Product analysis: {len(product_analysis)} chars")
-        print(f"   - Competitor analysis: {len(competitor_analysis)} chars")
-        print(f"   - Main product data: {len(main_product_data)} chars")
+        self._send_notification(
+            session_id=session_id,
+            status="working",
+            progress=0.7,
+            current_task="Starting optimization advisory",
+            thinking_step="Generating positioning and optimization strategies"
+        )
         
-        # Validate we have analysis results to work with
-        has_analyses = bool(product_analysis and competitor_analysis and 
-                           len(product_analysis) > 50 and len(competitor_analysis) > 50)
-        
-        if not has_analyses:
-            print("⚠️ Optimization advisor starting without complete market analysis")
-        else:
-            print("✅ Optimization advisor has complete market analysis data")
-        
-        # Include product data if analyses are empty
-        if not product_analysis and not competitor_analysis:
-            content = f"Create optimization recommendations for this product:\n{main_product_data}"
-        else:
-            content = f"Based on this analysis, create optimization recommendations:\n\nProduct Analysis:\n{product_analysis}\n\nCompetitor Analysis:\n{competitor_analysis}"
-        
-        # Invoke the optimization advisor agent
-        result = optimization_advisor_agent.invoke({
-            "messages": [{"role": "user", "content": content}],
-            "session_id": session_id
-        })
-        
-        # Extract strategy from result - handle both dict and AIMessage objects
-        if hasattr(result, 'get') and result.get("messages"):
-            last_message = result["messages"][-1]
-            if hasattr(last_message, 'content'):
-                final_message = last_message.content
-            elif isinstance(last_message, dict):
-                final_message = last_message.get("content", "")
+        try:
+            print("Running optimization advisory...")
+            
+            # Prepare comprehensive input for optimization advisor
+            optimization_input = f"""
+Please provide comprehensive optimization recommendations based on the following:
+
+COLLECTED PRODUCT DATA:
+{collected_data}
+
+MARKET ANALYSIS RESULTS:
+{market_analysis}
+
+Please use both tools:
+1. market_positioning - to develop strategic positioning recommendations
+2. product_optimizer - to create specific optimization strategies
+
+Focus on actionable recommendations for Amazon marketplace success.
+"""
+            
+            # Run optimization advisor agent
+            agent_response = optimization_advisor_agent.invoke({
+                "messages": [{"role": "user", "content": optimization_input}]
+            })
+            
+            # Extract the final message content
+            optimization_results = ""
+            if agent_response and "messages" in agent_response:
+                for msg in agent_response["messages"]:
+                    if hasattr(msg, 'content') and msg.content:
+                        optimization_results = msg.content
+            
+            if optimization_results:
+                self._send_notification(
+                    session_id=session_id,
+                    status="completed",
+                    progress=1.0,
+                    current_task="Complete analysis finished",
+                    thinking_step="Successfully generated optimization recommendations"
+                )
+                print(f"✅ Optimization advisory successful ({len(optimization_results)} characters)")
+                
+                return {
+                    **state,
+                    "optimization_results": optimization_results,
+                    "current_phase": "optimization_complete",
+                    "workflow_status": "completed"
+                }
             else:
-                final_message = str(last_message)
-        else:
-            final_message = str(result)
-        
-        # Update state
-        state["optimization_strategy"] = final_message
-        state["next_agent"] = None  # Workflow complete
-        
-        return state
+                raise Exception("No optimization results from optimization_advisor_agent")
+                
+        except Exception as e:
+            error_msg = f"Optimization advisory failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            self._send_notification(
+                session_id=session_id,
+                status="error",
+                progress=0.66,
+                current_task="Optimization advisory failed",
+                error_message=error_msg
+            )
+            
+            return {
+                **state,
+                "current_phase": "optimization_failed",
+                "workflow_status": "failed",
+                "error_message": error_msg
+            }
     
-    def supervisor_node(state: AnalysisState) -> AnalysisState:
-        """Supervisor node to coordinate workflow"""
-        next_agent = state.get("next_agent")
-        
-        if not next_agent:
-            # Workflow is complete
-            return state
-        
-        print(f"👥 Supervisor: Directing workflow to {next_agent}")
-        return state
-    
-    def route_to_agent(state: AnalysisState) -> str:
-        """Route to the next agent based on state"""
-        next_agent = state.get("next_agent")
-        
-        if next_agent == "data_collector":
-            return "data_collector"
-        elif next_agent == "market_analyzer":
-            return "market_analyzer"
-        elif next_agent == "optimization_advisor":
-            return "optimization_advisor"
+    def should_continue_after_data_collection(self, state: SupervisorState) -> str:
+        """Conditional edge: decide whether to continue after data collection"""
+        if state["workflow_status"] == "data_collection_success":
+            return "market_analysis_node"
         else:
             return END
     
-    # Create the graph
-    workflow = StateGraph(AnalysisState)
+    def should_continue_after_market_analysis(self, state: SupervisorState) -> str:
+        """Conditional edge: decide whether to continue after market analysis"""
+        if state["workflow_status"] == "market_analysis_success":
+            return "optimization_advisory_node"
+        else:
+            return END
     
-    # Add nodes
-    workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("data_collector", data_collector_node)
-    workflow.add_node("market_analyzer", market_analyzer_node)
-    workflow.add_node("optimization_advisor", optimization_advisor_node)
+    def _build_graph(self) -> StateGraph:
+        """Build the LangGraph workflow"""
+        
+        # Create the graph
+        workflow = StateGraph(SupervisorState)
+        
+        # Add nodes (avoid conflicts with state keys)
+        workflow.add_node("data_collection_node", self.data_collection_node)
+        workflow.add_node("market_analysis_node", self.market_analysis_node)
+        workflow.add_node("optimization_advisory_node", self.optimization_advisory_node)
+        
+        # Add edges
+        workflow.add_edge(START, "data_collection_node")
+        workflow.add_conditional_edges(
+            "data_collection_node",
+            self.should_continue_after_data_collection
+        )
+        workflow.add_conditional_edges(
+            "market_analysis_node", 
+            self.should_continue_after_market_analysis
+        )
+        workflow.add_edge("optimization_advisory_node", END)
+        
+        # Compile the graph
+        return workflow.compile()
     
-    # Add edges
-    workflow.add_edge("data_collector", "supervisor")
-    workflow.add_edge("market_analyzer", "supervisor")
-    workflow.add_edge("optimization_advisor", "supervisor")
-    
-    # Add conditional edges from supervisor
-    workflow.add_conditional_edges(
-        "supervisor",
-        route_to_agent,
-        {
-            "data_collector": "data_collector",
-            "market_analyzer": "market_analyzer", 
-            "optimization_advisor": "optimization_advisor",
-            END: END
+    def run_analysis(self, product_url: str) -> Dict[str, Any]:
+        """Run the complete analysis workflow using LangGraph"""
+        print("AMAZON PRODUCT ANALYSIS SUPERVISOR (LangGraph)")
+        print("="*80)
+        print(f"Product URL: {product_url}")
+        print(f"Session ID: {self.session_id}")
+        print("="*80)
+        
+        # Initialize state
+        initial_state = {
+            "messages": [],
+            "product_url": product_url,
+            "session_id": self.session_id,
+            "collected_data": None,
+            "market_analysis": None,
+            "optimization_results": None,
+            "workflow_status": "initialized",
+            "current_phase": "starting",
+            "error_message": None
         }
-    )
+        
+        self._send_notification(
+            session_id=self.session_id,
+            status="working",
+            progress=0.0,
+            current_task="Initializing analysis",
+            thinking_step="Starting complete Amazon product analysis workflow"
+        )
+        
+        # Run the workflow
+        final_state = self.graph.invoke(initial_state)
+        
+        # Final summary
+        print("\n" + "="*80)
+        print("WORKFLOW COMPLETION SUMMARY")
+        print("="*80)
+        
+        phase1_success = final_state.get('collected_data') is not None
+        phase2_success = final_state.get('market_analysis') is not None  
+        phase3_success = final_state.get('optimization_results') is not None
+        
+        print(f"✅ Phase 1 (Data Collection): {'SUCCESS' if phase1_success else 'FAILED'}")
+        print(f"✅ Phase 2 (Market Analysis): {'SUCCESS' if phase2_success else 'FAILED'}")
+        print(f"✅ Phase 3 (Optimization): {'SUCCESS' if phase3_success else 'FAILED'}")
+        print(f"🔄 Final Status: {final_state.get('workflow_status', 'unknown')}")
+        
+        if final_state.get('error_message'):
+            print(f"❌ Error: {final_state['error_message']}")
+        
+        if phase1_success and phase2_success and phase3_success:
+            print("\n🎉 COMPLETE WORKFLOW SUCCESS!")
+        
+        return final_state
     
-    # Set entry point
-    workflow.set_entry_point("supervisor")
-    
-    return workflow
+    def get_final_report(self, state: Dict[str, Any]) -> str:
+        """Generate a comprehensive final report from the workflow state"""
+        if state.get('workflow_status') != 'completed':
+            return f"Analysis incomplete. Status: {state.get('workflow_status', 'unknown')}"
+        
+        timestamp = str(datetime.now())
+        
+        report = f"""
+# Amazon Product Analysis Report (LangGraph Workflow)
+Generated: {timestamp}
+Session: {state.get('session_id', 'unknown')}
+Product URL: {state.get('product_url', 'unknown')}
 
+## Executive Summary
+Complete analysis workflow executed successfully using LangGraph:
+- Data Collection ✅
+- Market Analysis ✅ 
+- Optimization Advisory ✅
 
-def analyze_product(amazon_url: str, session_id: Optional[str] = None):
+## Phase 1: Data Collection Results
+{state.get('collected_data', 'No data')[:1000]}...
+
+## Phase 2: Market Analysis Results  
+{state.get('market_analysis', 'No analysis')[:1000]}...
+
+## Phase 3: Optimization Recommendations
+{state.get('optimization_results', 'No recommendations')[:1000]}...
+
+---
+Report generated by LangGraph Amazon Analysis Supervisor
+"""
+        return report
+
+# Create supervisor instance
+def create_supervisor(session_id: Optional[str] = None) -> AmazonAnalysisSupervisor:
+    """Create a new LangGraph supervisor instance"""
+    return AmazonAnalysisSupervisor(session_id=session_id)
+
+# Convenience function for direct use
+def run_complete_amazon_analysis(product_url: str, session_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Analyze an Amazon product using the multi-agent workflow
+    Run complete Amazon product analysis workflow using LangGraph
     
     Args:
-        amazon_url: The Amazon product URL to analyze
-        session_id: Optional session ID for WebSocket updates
-        
+        product_url: Amazon product URL to analyze
+        session_id: Optional session ID for tracking
+    
     Returns:
-        Analysis results from all agents
+        Dictionary with final workflow state
     """
-    # Create and compile the workflow
-    workflow = create_supervisor_workflow().compile()
+    supervisor = create_supervisor(session_id)
+    return supervisor.run_analysis(product_url)
+
+# Main function for testing
+def main():
+    """Test the LangGraph supervisor with example URL"""
+    test_url = "https://www.amazon.com/dp/B08SWDN5FS/ref=sspa_dk_detail_0?pd_rd_i=B08SWDN5FS&pd_rd_w=7ooYl&content-id=amzn1.sym.953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_p=953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_r=QB4D7523XBB2S2P11T3F&pd_rd_wg=eG4PU&pd_rd_r=92e66331-65b5-401b-99e2-b3cb92faefd6&s=toys-and-games&sp_csd=d2lkZ2V0TmFtZT1zcF9kZXRhaWwy&th=1"
     
-    # Initial state
-    initial_state = {
-        "messages": [],
-        "amazon_url": amazon_url,
-        "main_product_data": None,
-        "competitor_data": None,
-        "product_analysis": None,
-        "competitor_analysis": None,
-        "market_positioning": None,
-        "optimization_strategy": None,
-        "next_agent": "data_collector",  # Start with data collection
-        "session_id": session_id
-    }
+    supervisor = create_supervisor()
+    final_state = supervisor.run_analysis(test_url)
     
-    # Execute the workflow
+    # Display final report
+    print("\n" + "="*80)
+    print("FINAL REPORT")
+    print("="*80)
+    report = supervisor.get_final_report(final_state)
+    print(report)
+    
+    return final_state
+
+# Export function for main.py compatibility
+def analyze_product(product_url: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Main entry point for product analysis - compatible with main.py
+    
+    Args:
+        product_url: Amazon product URL to analyze
+        session_id: Optional session ID for tracking
+    
+    Returns:
+        Dictionary with analysis results
+    """
     try:
-        result = workflow.invoke(initial_state)
+        supervisor = create_supervisor(session_id)
+        final_state = supervisor.run_analysis(product_url)
         
-        # Format the final result
-        return {
-            "success": True,
-            "amazon_url": amazon_url,
-            "main_product_data": result.get("main_product_data"),
-            "product_analysis": result.get("product_analysis"),
-            "competitor_analysis": result.get("competitor_analysis"),
-            "optimization_strategy": result.get("optimization_strategy"),
-            "session_id": session_id
-        }
+        # Check if workflow completed successfully
+        if final_state.get('workflow_status') == 'completed':
+            return {
+                "success": True,
+                "session_id": session_id,
+                "product_url": product_url,
+                "data_collection": final_state.get('collected_data'),
+                "market_analysis": final_state.get('market_analysis'),
+                "optimization_results": final_state.get('optimization_results'),
+                "final_report": supervisor.get_final_report(final_state)
+            }
+        else:
+            return {
+                "success": False,
+                "error": final_state.get('error_message', 'Analysis workflow failed'),
+                "session_id": session_id,
+                "product_url": product_url,
+                "workflow_status": final_state.get('workflow_status')
+            }
     except Exception as e:
-        print(f"Error in workflow execution: {e}")
         return {
             "success": False,
-            "error": str(e),
-            "amazon_url": amazon_url,
-            "session_id": session_id
+            "error": f"Analysis execution failed: {str(e)}",
+            "session_id": session_id,
+            "product_url": product_url
         }
 
-
-# Example usage
 if __name__ == "__main__":
-    # Example product URL
-    test_url = "https://www.amazon.com/Tamagotchi-Nano-Peanuts-Silicone-Case/dp/B0FB7FQWJL/?_encoding=UTF8&pd_rd_w=z2Ksk&content-id=amzn1.sym.0ee7ac10-1e05-43b4-8708-e2b0e6430ef1&pf_rd_p=0ee7ac10-1e05-43b4-8708-e2b0e6430ef1&pf_rd_r=CH7HD7239THZ01SHTZ6N&pd_rd_wg=2kLkB&pd_rd_r=9344b5f4-da0d-45b3-b124-2e19d8d944eb&ref_=pd_hp_d_btf_exports_top_sellers_unrec"
-    
-    print("Starting Amazon Product Analysis...")
-    print(f"Analyzing: {test_url}")
-    print("-" * 50)
-    
-    # Use the new supervisor
-    result = analyze_product(test_url)
-    print(result)
+    main()

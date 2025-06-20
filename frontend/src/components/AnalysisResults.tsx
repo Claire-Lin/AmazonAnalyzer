@@ -23,9 +23,8 @@ interface AnalysisResultsProps {
 export function AnalysisResults({ session, result }: AnalysisResultsProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     productData: true,
-    productAnalysis: false,
-    competitorAnalysis: false,
-    optimizationStrategy: false
+    marketAnalysis: false,
+    optimizationResults: false
   })
 
   const toggleSection = (section: string) => {
@@ -35,84 +34,59 @@ export function AnalysisResults({ session, result }: AnalysisResultsProps) {
     }))
   }
 
-  const formatJson = (data: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-    if (typeof data === 'string') {
-      try {
-        return JSON.parse(data)
-      } catch {
-        return data
-      }
-    }
-    return data
-  }
 
   const renderProductData = (productData: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
     if (!productData) return null
 
-    const parsed = formatJson(productData)
+    // The data_collection field contains text with structured information
+    // We need to parse it to extract the main product data and competitor data
+    const dataText = typeof productData === 'string' ? productData : JSON.stringify(productData)
     
     return (
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="space-y-4">
-          <div>
-            <h4 className="font-medium text-gray-900 mb-2">Product Information</h4>
-            <div className="space-y-2 text-sm">
-              {parsed.title && (
-                <div>
-                  <span className="font-medium text-gray-700">Title:</span>
-                  <p className="text-gray-600 mt-1">{parsed.title}</p>
-                </div>
-              )}
-              {parsed.brand && (
-                <div>
-                  <span className="font-medium text-gray-700">Brand:</span>
-                  <span className="text-gray-600 ml-2">{parsed.brand}</span>
-                </div>
-              )}
-              {parsed.price && (
-                <div className="flex items-center">
-                  <DollarSign className="w-4 h-4 text-green-500 mr-1" />
-                  <span className="font-medium text-gray-700">Price:</span>
-                  <span className="text-gray-600 ml-2">{parsed.currency || '$'}{parsed.price}</span>
-                </div>
-              )}
-              {parsed.asin && (
-                <div>
-                  <span className="font-medium text-gray-700">ASIN:</span>
-                  <span className="text-gray-600 ml-2">{parsed.asin}</span>
-                </div>
-              )}
+      <div className="space-y-6">
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3">Data Collection Results</h4>
+          <div className="bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto">
+            <div className="prose prose-sm max-w-none">
+              <ReactMarkdown 
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({children}) => <h1 className="text-lg font-bold text-gray-900 mb-2">{children}</h1>,
+                  h2: ({children}) => <h2 className="text-base font-semibold text-gray-800 mb-2 mt-3">{children}</h2>,
+                  h3: ({children}) => <h3 className="text-sm font-medium text-gray-700 mb-1 mt-2">{children}</h3>,
+                  ul: ({children}) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                  ol: ({children}) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                  li: ({children}) => <li className="text-gray-600 text-sm">{children}</li>,
+                  p: ({children}) => <p className="mb-2 text-gray-700 text-sm leading-relaxed">{children}</p>,
+                  strong: ({children}) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                  code: ({children}) => <code className="bg-gray-200 px-1 py-0.5 rounded text-xs font-mono">{children}</code>,
+                }}
+              >
+                {dataText}
+              </ReactMarkdown>
             </div>
           </div>
-
-          {parsed.color && (
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Variant</h4>
-              <span className="inline-block px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
-                {parsed.color}
-              </span>
-            </div>
-          )}
         </div>
-
-        <div className="space-y-4">
-          {parsed.description && (
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Description</h4>
-              <div className="text-sm text-gray-600 max-h-32 overflow-y-auto bg-gray-50 p-3 rounded">
-                {parsed.description}
+        
+        {/* Summary Section */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-2">Collection Summary</h4>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-blue-50 p-3 rounded">
+              <div className="flex items-center">
+                <Package className="w-4 h-4 text-blue-500 mr-2" />
+                <span className="text-sm font-medium text-blue-800">Main Product</span>
               </div>
+              <p className="text-xs text-blue-700 mt-1">Product data scraped and analyzed</p>
             </div>
-          )}
-
-          {parsed.spec && (
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Specifications</h4>
-              <div className="text-sm text-gray-600 max-h-32 overflow-y-auto bg-gray-50 p-3 rounded">
-                <pre className="whitespace-pre-wrap">{parsed.spec}</pre>
+            <div className="bg-green-50 p-3 rounded">
+              <div className="flex items-center">
+                <Target className="w-4 h-4 text-green-500 mr-2" />
+                <span className="text-sm font-medium text-green-800">Competitors</span>
               </div>
+              <p className="text-xs text-green-700 mt-1">Competitor products identified and scraped</p>
             </div>
-          )}
+          </div>
         </div>
       </div>
     )
@@ -180,28 +154,21 @@ export function AnalysisResults({ session, result }: AnalysisResultsProps) {
       key: 'productData',
       title: 'Product Data',
       icon: <Package className="w-5 h-5 text-blue-500" />,
-      content: result.main_product_data,
+      content: result.data_collection,
       render: renderProductData
     },
     {
-      key: 'productAnalysis',
-      title: 'Product Analysis',
+      key: 'marketAnalysis',
+      title: 'Market Analysis',
       icon: <TrendingUp className="w-5 h-5 text-green-500" />,
-      content: result.product_analysis,
-      render: (content: string) => renderAnalysisSection('Market Position Analysis', content, <TrendingUp className="w-4 h-4 text-green-500" />)
+      content: result.market_analysis,
+      render: (content: string) => renderAnalysisSection('Market Analysis & Competitive Intelligence', content, <TrendingUp className="w-4 h-4 text-green-500" />)
     },
     {
-      key: 'competitorAnalysis',
-      title: 'Competitor Analysis',
-      icon: <Target className="w-5 h-5 text-orange-500" />,
-      content: result.competitor_analysis,
-      render: (content: string) => renderAnalysisSection('Competitive Intelligence', content, <Target className="w-4 h-4 text-orange-500" />)
-    },
-    {
-      key: 'optimizationStrategy',
+      key: 'optimizationResults',
       title: 'Optimization Strategy',
       icon: <Lightbulb className="w-5 h-5 text-yellow-500" />,
-      content: result.optimization_strategy,
+      content: result.optimization_results,
       render: (content: string) => renderAnalysisSection('Optimization Recommendations', content, <Lightbulb className="w-4 h-4 text-yellow-500" />)
     }
   ]

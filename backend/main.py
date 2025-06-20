@@ -175,22 +175,19 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
         # Create a separate thread pool for the analysis
         executor = ThreadPoolExecutor(max_workers=1)
         
-        # Run the sync analysis in the executor with timeout
+        # Run the sync analysis in the executor without timeout
         try:
-            result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    executor,
-                    analyze_product,
-                    amazon_url,
-                    session_id
-                ),
-                timeout=180  # 3 minute timeout
+            result = await asyncio.get_event_loop().run_in_executor(
+                executor,
+                analyze_product,
+                amazon_url,
+                session_id
             )
-        except asyncio.TimeoutError:
-            print(f"Analysis timeout for session {session_id}")
+        except Exception as e:
+            print(f"Analysis error for session {session_id}: {str(e)}")
             result = {
                 "success": False,
-                "error": "Analysis timed out after 3 minutes"
+                "error": f"Analysis failed: {str(e)}"
             }
         finally:
             # Clean up the executor
