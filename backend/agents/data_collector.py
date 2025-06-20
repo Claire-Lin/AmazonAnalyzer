@@ -38,10 +38,10 @@ WORKFLOW:
    - Product title/name
    - Product category
    - Key features
-4. Use amazon_search with ALL keywords at once:
-   - Create a comma-separated list of keywords
-   - Example: "laptop stand,laptop cooling pad,laptop riser"
-   - The tool will search each keyword and return combined results
+4. Use amazon_search:
+   - Create a keyword
+   - Example: "laptop stand"
+   - The tool will search the keyword and return the result urls
 5. After collecting all competitor URLs, scrape the top 3-5 competitors using amazon_scraper
 6. Compile all data into a structured format
 

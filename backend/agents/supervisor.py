@@ -8,13 +8,13 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 try:
-    from .session_context import get_session_id
+    from .session_context import get_session_id, set_session_id
     from .websocket_utils import send_websocket_notification_sync
     from .data_collector import data_collector_agent
     from .market_analyzer import market_analyzer_agent
     from .optimization_advisor import optimization_advisor_agent
 except ImportError:
-    from session_context import get_session_id
+    from session_context import get_session_id, set_session_id
     from websocket_utils import send_websocket_notification_sync
     from data_collector import data_collector_agent
     from market_analyzer import market_analyzer_agent
@@ -105,6 +105,9 @@ class AmazonAnalysisSupervisor:
         try:
             print(f"Collecting data for: {product_url}")
             
+            # Set session context for sub-agents to access
+            set_session_id(session_id)
+            
             # Run data collector agent
             agent_response = data_collector_agent.invoke({
                 "messages": [{"role": "user", "content": product_url}]
@@ -173,6 +176,9 @@ class AmazonAnalysisSupervisor:
         
         try:
             print("Running market analysis...")
+            
+            # Set session context for sub-agents to access
+            set_session_id(session_id)
             
             # Prepare clear instructions for market analyzer
             analysis_instruction = f"""
@@ -256,6 +262,9 @@ Please execute both analysis tools to provide complete market insights.
         
         try:
             print("Running optimization advisory...")
+            
+            # Set session context for sub-agents to access
+            set_session_id(session_id)
             
             # Prepare comprehensive input for optimization advisor
             optimization_input = f"""
@@ -383,6 +392,9 @@ Focus on actionable recommendations for Amazon marketplace success.
             "current_phase": "starting",
             "error_message": None
         }
+        
+        # Set session context for the entire workflow
+        set_session_id(self.session_id)
         
         self._send_notification(
             session_id=self.session_id,
