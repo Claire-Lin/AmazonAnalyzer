@@ -177,7 +177,7 @@ This system uses a sophisticated multi-agent architecture powered by LangGraph t
 # Start analysis
 curl -X POST "http://localhost:8000/api/analyze" \
      -H "Content-Type: application/json" \
-     -d '{"amazon_url": "https://www.amazon.com/dp/B08N5WRWNW"}'
+     -d '{"amazon_url": "https://www.amazon.com/dp/B08N5WRWNW..."}'
 
 # Check status
 curl "http://localhost:8000/api/analysis/{session_id}/status"
@@ -200,11 +200,6 @@ Try these Amazon URLs in the application:
 2. **Harry Potter Hedwig Interactive Owl (New)**
    ```
    https://www.amazon.com/dp/B08SWDN5FS/ref=sspa_dk_detail_0?pd_rd_i=B08SWDN5FS&pd_rd_w=7ooYl&content-id=amzn1.sym.953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_p=953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_r=QB4D7523XBB2S2P11T3F&pd_rd_wg=eG4PU&pd_rd_r=92e66331-65b5-401b-99e2-b3cb92faefd6&s=toys-and-games&sp_csd=d2lkZ2V0TmFtZT1zcF9kZXRhaWwy&th=1
-   ```
-
-3. **Echo Dot (Legacy)**
-   ```
-   https://www.amazon.com/dp/B08N5WRWNW
    ```
 
 ### Complete Workflow Test
