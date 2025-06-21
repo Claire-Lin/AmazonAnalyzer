@@ -335,10 +335,10 @@ export default function Home() {
           <h3 className="text-lg font-semibold mb-4">Try These Example Products:</h3>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="bg-white rounded p-4">
-              <h4 className="font-medium text-gray-900">Echo Dot (4th Gen)</h4>
-              <p className="text-sm text-gray-600 mb-2">Smart speaker with Alexa</p>
+              <h4 className="font-medium text-gray-900">Tamagotchi Nano Peanuts</h4>
+              <p className="text-sm text-gray-600 mb-2">Digital pet toy with silicone case</p>
               <button
-                onClick={() => setAmazonUrl('https://www.amazon.com/dp/B08N5WRWNW')}
+                onClick={() => setAmazonUrl('https://www.amazon.com/Tamagotchi-Nano-Peanuts-Silicone-Case/dp/B0FB7FQWJL/?_encoding=UTF8&pd_rd_w=z2Ksk&content-id=amzn1.sym.0ee7ac10-1e05-43b4-8708-e2b0e6430ef1&pf_rd_p=0ee7ac10-1e05-43b4-8708-e2b0e6430ef1&pf_rd_r=CH7HD7239THZ01SHTZ6N&pd_rd_wg=2kLkB&pd_rd_r=9344b5f4-da0d-45b3-b124-2e19d8d944eb&ref_=pd_hp_d_btf_exports_top_sellers_unrec')}
                 className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                 disabled={isAnalyzing}
               >
@@ -346,10 +346,10 @@ export default function Home() {
               </button>
             </div>
             <div className="bg-white rounded p-4">
-              <h4 className="font-medium text-gray-900">AirPods Pro (2nd Gen)</h4>
-              <p className="text-sm text-gray-600 mb-2">Wireless earbuds with noise cancellation</p>
+              <h4 className="font-medium text-gray-900">Harry Potter Hedwig Interactive Owl</h4>
+              <p className="text-sm text-gray-600 mb-2">Interactive owl with 15+ sounds and movements</p>
               <button
-                onClick={() => setAmazonUrl('https://www.amazon.com/dp/B0BDHWDR12')}
+                onClick={() => setAmazonUrl('https://www.amazon.com/dp/B08SWDN5FS/ref=sspa_dk_detail_0?pd_rd_i=B08SWDN5FS&pd_rd_w=7ooYl&content-id=amzn1.sym.953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_p=953c7d66-4120-4d22-a777-f19dbfa69309&pf_rd_r=QB4D7523XBB2S2P11T3F&pd_rd_wg=eG4PU&pd_rd_r=92e66331-65b5-401b-99e2-b3cb92faefd6&s=toys-and-games&sp_csd=d2lkZ2V0TmFtZT1zcF9kZXRhaWwy&th=1')}
                 className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                 disabled={isAnalyzing}
               >

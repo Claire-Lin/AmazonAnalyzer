@@ -489,6 +489,176 @@ def amazon_search(keyword: str, k: int = 5, session_id: Optional[str] = None) ->
         return f"Error searching Amazon: {str(e)}"
 
 
+def amazon_scraper_sequential(urls: str, session_id: Optional[str] = None) -> str:
+    """
+    Scrape multiple Amazon product URLs SEQUENTIALLY to avoid blocking.
+    Input: Newline-separated URLs or comma-separated URLs
+    Returns: JSON string with all scraped product data
+    
+    This function prevents Amazon blocking by:
+    - Processing URLs one at a time
+    - Adding random delays between scrapes (2-4 seconds)
+    - Showing progress for each URL
+    """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 amazon_scraper_sequential - Retrieved session_id from context: {session_id}")
+    
+    # Parse URLs (handle both newline-separated and comma-separated)
+    if isinstance(urls, str):
+        # Try newline-separated first, then comma-separated
+        if '\n' in urls:
+            url_list = [url.strip() for url in urls.split('\n') if url.strip()]
+        else:
+            url_list = [url.strip() for url in urls.split(',') if url.strip()]
+    else:
+        url_list = urls
+    
+    print(f"🔍 Sequential scraping for {len(url_list)} URLs")
+    
+    all_products = []
+    successful_scrapes = 0
+    failed_scrapes = 0
+    
+    # Send initial notification
+    if websocket_manager and session_id:
+        try:
+            send_websocket_notification_sync(
+                websocket_manager=websocket_manager,
+                session_id=session_id,
+                agent_name="data_collector",
+                status="working",
+                progress=0.1,
+                current_task="Starting sequential product scraping",
+                thinking_step=f"Will scrape {len(url_list)} URLs sequentially to avoid blocking"
+            )
+        except Exception as e:
+            print(f"WebSocket notification failed: {e}")
+    
+    # Process each URL sequentially
+    for idx, url in enumerate(url_list):
+        progress = 0.1 + (0.8 * (idx / len(url_list)))
+        
+        # Send progress update
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="data_collector",
+                    status="working",
+                    progress=progress,
+                    current_task=f"Scraping product {idx + 1}/{len(url_list)}",
+                    thinking_step=f"Processing: {url[:50]}..."
+                )
+            except Exception:
+                pass
+        
+        print(f"  [{idx + 1}/{len(url_list)}] Scraping: {url}")
+        
+        try:
+            # Use the existing AmazonScraper
+            scraper = AmazonScraper(headless=True)
+            product_data = asyncio.run(scraper.scrape_product(url))
+            
+            if product_data.get('success', True):
+                # Handle bot detection gracefully
+                if product_data.get('bot_detected'):
+                    print("    🤖 Bot detected - providing basic product info")
+                    product_data['analysis_note'] = 'Product data limited due to anti-bot measures'
+                    product_data['success'] = True
+                
+                # Save to database if successful
+                if db_manager and session_id:
+                    try:
+                        asin = extract_asin_from_url(url)
+                        
+                        db_product_data = {
+                            "asin": asin,
+                            "url": url,
+                            "title": product_data.get("title"),
+                            "brand": product_data.get("brand"),
+                            "price": product_data.get("price"),
+                            "currency": product_data.get("currency", "USD"),
+                            "description": product_data.get("description"),
+                            "color": product_data.get("color"),
+                            "spec": product_data.get("spec"),
+                            "reviews": product_data.get("reviews", []),
+                            "success": product_data.get("success", True)
+                        }
+                        
+                        # Check if this is the main product
+                        existing_products = db_manager.get_session_products(session_id)
+                        is_main_product = len(existing_products) == 0
+                        
+                        db_saved = db_manager.save_product_data(
+                            session_id=session_id,
+                            product_data=db_product_data,
+                            is_main=is_main_product
+                        )
+                        
+                        if db_saved:
+                            print(f"    ✅ Saved {'main' if is_main_product else 'competitor'} product to database: {product_data.get('title', 'Unknown')}")
+                        
+                    except Exception as e:
+                        print(f"    ⚠️ Database save error: {e}")
+                
+                all_products.append(product_data)
+                successful_scrapes += 1
+                print(f"    ✅ Successfully scraped: {product_data.get('title', 'Unknown product')}")
+            else:
+                failed_scrapes += 1
+                print(f"    ❌ Failed to scrape: {product_data.get('error', 'Unknown error')}")
+                # Still include failed results for transparency
+                all_products.append(product_data)
+                
+        except Exception as e:
+            failed_scrapes += 1
+            error_result = {
+                "error": f"Failed to scrape: {str(e)}",
+                "success": False,
+                "url": url
+            }
+            all_products.append(error_result)
+            print(f"    ❌ Exception during scraping: {e}")
+            
+        # Add delay between scrapes (except for the last one)
+        if idx < len(url_list) - 1:
+            delay = random.uniform(2.0, 4.0)  # Random delay between 2-4 seconds
+            print(f"    ⏱️ Waiting {delay:.1f} seconds before next scrape...")
+            time.sleep(delay)
+    
+    # Send completion notification
+    if websocket_manager and session_id:
+        try:
+            send_websocket_notification_sync(
+                websocket_manager=websocket_manager,
+                session_id=session_id,
+                agent_name="data_collector",
+                status="working",
+                progress=0.9,
+                current_task="Sequential scraping complete",
+                thinking_step=f"Scraped {successful_scrapes} products successfully, {failed_scrapes} failed"
+            )
+        except Exception:
+            pass
+    
+    print(f"✅ Sequential scraping complete: {successful_scrapes} successful, {failed_scrapes} failed")
+    
+    # Return all results as JSON
+    result = {
+        "sequential_scraping_results": all_products,
+        "summary": {
+            "total_urls": len(url_list),
+            "successful_scrapes": successful_scrapes,
+            "failed_scrapes": failed_scrapes
+        }
+    }
+    
+    return json.dumps(result, indent=2)
+
+
 def amazon_search_sequential(keywords: str, k: int = 5, session_id: Optional[str] = None) -> str:
     """
     Search Amazon for multiple keywords SEQUENTIALLY to avoid blocking.
