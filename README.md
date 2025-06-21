@@ -359,13 +359,6 @@ The system uses LangGraph to orchestrate a sophisticated multi-agent workflow:
 - ✅ **Session Management**: Complete session tracking and persistence
 - ✅ **Database APIs**: Rich data retrieval endpoints
 
-### Bug Fixes
-
-- 🐛 Fixed WebSocket JSON concatenation errors
-- 🐛 Fixed Data Collector completion status
-- 🐛 Improved Amazon blocking prevention
-- 🐛 Enhanced error logging and debugging
-
 ## 🤝 Contributing
 
 1. Fork the repository
@@ -379,31 +372,6 @@ The system uses LangGraph to orchestrate a sophisticated multi-agent workflow:
 This project is for educational and demonstration purposes. Please ensure compliance with Amazon's Terms of Service when using this tool.
 
 ## 🆘 Troubleshooting
-
-### Common Issues
-
-1. **WebSocket JSON Errors (FIXED)**
-   - ✅ Now handles concatenated JSON messages gracefully
-   - ✅ Message serialization prevents concurrent send issues
-
-2. **Amazon Blocking (IMPROVED)**
-   - ✅ Sequential scraping with delays prevents most blocking
-   - ✅ Use `amazon_scraper_sequential()` for multiple URLs
-   - Try different user agents or increase delays if still blocked
-
-3. **Data Collector Stuck (FIXED)**
-   - ✅ Now properly sends completion notifications
-   - ✅ Frontend correctly shows agent completion status
-
-4. **Database Connection Issues**
-   - Ensure PostgreSQL and Redis are running
-   - Check DATABASE_URL and REDIS_URL format
-   - Verify Docker containers are healthy
-
-5. **Frontend Build Errors**
-   - Clear npm cache: `npm cache clean --force`
-   - Delete node_modules and reinstall
-   - Check TypeScript errors in console
 
 ### Performance Tips
 
@@ -421,7 +389,3 @@ This project is for educational and demonstration purposes. Please ensure compli
 - Open issues in the project repository
 
 ---
-
-**Built with ❤️ using LangGraph, FastAPI, Next.js, Redis, PostgreSQL, and modern AI technologies**
-
-*Last Updated: December 2024 - Version 2.0 with Enhanced Reliability & Performance*
