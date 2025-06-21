@@ -35,3 +35,6 @@ httpx>=0.25.2
 
 # Environment and configuration
 click>=8.1.7
+
+# Redis for caching and session management
+redis>=4.5.0

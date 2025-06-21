@@ -3,6 +3,8 @@ import asyncio
 from typing import List, Dict, Any, Optional
 import sys
 import os
+import time
+import random
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 try:
@@ -25,12 +27,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from amazon_scraper import AmazonScraper
 from amazon_search import search_amazon_urls
 
-# Import WebSocket manager for real-time updates
+# Import WebSocket manager and database manager for real-time updates and data persistence
 try:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from services.websocket_manager import websocket_manager
+    from models.database import db_manager
 except ImportError:
     websocket_manager = None
+    db_manager = None
 
 # Initialize LLM model for analysis
 llm = ChatOpenAI(
@@ -38,6 +42,25 @@ llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     temperature=0.3
 )
+
+def extract_asin_from_url(url: str) -> Optional[str]:
+    """Extract ASIN from Amazon URL"""
+    import re
+    
+    # Common ASIN patterns in Amazon URLs
+    patterns = [
+        r'/dp/([A-Z0-9]{10})',  # /dp/ASIN
+        r'/gp/product/([A-Z0-9]{10})',  # /gp/product/ASIN
+        r'amazon\.com/.*?/([A-Z0-9]{10})',  # General pattern
+        r'[?&]asin=([A-Z0-9]{10})',  # Query parameter
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    
+    return None
 
 async def amazon_scraper_async(url: str, session_id: Optional[str] = None) -> str:
     """
@@ -78,6 +101,47 @@ async def amazon_scraper_async(url: str, session_id: Optional[str] = None) -> st
             if not product_data.get('success', True):
                 pass  # Keep the original error result
         
+        # Save product data to database
+        if db_manager and session_id and product_data.get('success', True):
+            try:
+                # Determine if this is the main product (first one scraped) or competitor
+                # For now, we'll assume the first scrape in a session is the main product
+                asin = extract_asin_from_url(url)
+                
+                # Prepare data for database storage
+                db_product_data = {
+                    "asin": asin,
+                    "url": url,
+                    "title": product_data.get("title"),
+                    "brand": product_data.get("brand"),
+                    "price": product_data.get("price"),
+                    "currency": product_data.get("currency", "USD"),
+                    "description": product_data.get("description"),
+                    "color": product_data.get("color"),
+                    "spec": product_data.get("spec"),
+                    "reviews": product_data.get("reviews", []),
+                    "success": product_data.get("success", True)
+                }
+                
+                # Check if this is the main product by seeing if any products exist for this session
+                existing_products = db_manager.get_session_products(session_id)
+                is_main_product = len(existing_products) == 0
+                
+                # Save to database
+                db_saved = db_manager.save_product_data(
+                    session_id=session_id,
+                    product_data=db_product_data,
+                    is_main=is_main_product
+                )
+                
+                if db_saved:
+                    print(f"✅ Saved {'main' if is_main_product else 'competitor'} product to database: {product_data.get('title', 'Unknown')}")
+                else:
+                    print(f"⚠️ Failed to save product to database")
+                
+            except Exception as e:
+                print(f"⚠️ Database save error: {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -87,8 +151,8 @@ async def amazon_scraper_async(url: str, session_id: Optional[str] = None) -> st
                     agent_name="data_collector",
                     status="working",
                     progress=0.4,
-                    current_task="Product data extracted",
-                    thinking_step=f"Successfully scraped: {product_data.get('title', 'Unknown product')}"
+                    current_task="Product data extracted and saved",
+                    thinking_step=f"Successfully scraped and stored: {product_data.get('title', 'Unknown product')}"
                 )
             except Exception as e:
                 print(f"WebSocket notification failed: {e}")
@@ -224,6 +288,41 @@ def amazon_scraper(url: str, session_id: Optional[str] = None) -> str:
             print("⚠️ Scraping failed, unable to extract product data")
             # Return the actual failed scraping result
         
+        # Save product data to database (sync version)
+        if db_manager and session_id and product_data.get('success', True):
+            try:
+                asin = extract_asin_from_url(url)
+                
+                db_product_data = {
+                    "asin": asin,
+                    "url": url,
+                    "title": product_data.get("title"),
+                    "brand": product_data.get("brand"),
+                    "price": product_data.get("price"),
+                    "currency": product_data.get("currency", "USD"),
+                    "description": product_data.get("description"),
+                    "color": product_data.get("color"),
+                    "spec": product_data.get("spec"),
+                    "reviews": product_data.get("reviews", []),
+                    "success": product_data.get("success", True)
+                }
+                
+                # Check if this is the main product
+                existing_products = db_manager.get_session_products(session_id)
+                is_main_product = len(existing_products) == 0
+                
+                db_saved = db_manager.save_product_data(
+                    session_id=session_id,
+                    product_data=db_product_data,
+                    is_main=is_main_product
+                )
+                
+                if db_saved:
+                    print(f"✅ Saved {'main' if is_main_product else 'competitor'} product to database (sync): {product_data.get('title', 'Unknown')}")
+                
+            except Exception as e:
+                print(f"⚠️ Database save error (sync): {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -233,8 +332,8 @@ def amazon_scraper(url: str, session_id: Optional[str] = None) -> str:
                     agent_name="data_collector",
                     status="working",
                     progress=0.4,
-                    current_task="Product data extracted",
-                    thinking_step=f"Successfully scraped: {product_data.get('title', 'Unknown product')}"
+                    current_task="Product data extracted and saved",
+                    thinking_step=f"Successfully scraped and stored: {product_data.get('title', 'Unknown product')}"
                 )
             except Exception as e:
                 print(f"WebSocket notification failed: {e}")
@@ -390,12 +489,125 @@ def amazon_search(keyword: str, k: int = 5, session_id: Optional[str] = None) ->
         return f"Error searching Amazon: {str(e)}"
 
 
+def amazon_search_sequential(keywords: str, k: int = 5, session_id: Optional[str] = None) -> str:
+    """
+    Search Amazon for multiple keywords SEQUENTIALLY to avoid blocking.
+    Input: Comma-separated keywords (e.g., "laptop stand,cooling pad,laptop accessories") and number of results per keyword
+    Returns: String with all Amazon product URLs found
+    
+    This function prevents Amazon blocking by:
+    - Processing keywords one at a time
+    - Adding random delays between searches (2-4 seconds)
+    - Showing progress for each keyword
+    """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 amazon_search_sequential - Retrieved session_id from context: {session_id}")
+    
+    # Parse keywords (handle both comma-separated string and list)
+    if isinstance(keywords, str):
+        keyword_list = [k.strip() for k in keywords.split(',') if k.strip()]
+    else:
+        keyword_list = keywords
+    
+    print(f"🔍 Sequential search for {len(keyword_list)} keywords: {keyword_list}")
+    
+    all_urls = []
+    seen_urls = set()  # To avoid duplicates
+    
+    # Send initial notification
+    if websocket_manager and session_id:
+        try:
+            send_websocket_notification_sync(
+                websocket_manager=websocket_manager,
+                session_id=session_id,
+                agent_name="data_collector",
+                status="working",
+                progress=0.5,
+                current_task="Starting sequential competitor search",
+                thinking_step=f"Will search for {len(keyword_list)} keywords sequentially to avoid blocking"
+            )
+        except Exception as e:
+            print(f"WebSocket notification failed: {e}")
+    
+    # Process each keyword sequentially
+    for idx, keyword in enumerate(keyword_list):
+        progress = 0.5 + (0.3 * (idx / len(keyword_list)))
+        
+        # Send progress update
+        if websocket_manager and session_id:
+            try:
+                send_websocket_notification_sync(
+                    websocket_manager=websocket_manager,
+                    session_id=session_id,
+                    agent_name="data_collector",
+                    status="working",
+                    progress=progress,
+                    current_task=f"Searching keyword {idx + 1}/{len(keyword_list)}",
+                    thinking_step=f"Searching Amazon for '{keyword}' (top {k} results)..."
+                )
+            except Exception:
+                pass
+        
+        print(f"  [{idx + 1}/{len(keyword_list)}] Searching for: {keyword}")
+        
+        try:
+            # Use the existing search_amazon_urls function
+            urls = search_amazon_urls(keyword, k)
+            
+            if urls:
+                # Add unique URLs to results
+                new_urls = [url for url in urls if url not in seen_urls]
+                all_urls.extend(new_urls)
+                seen_urls.update(new_urls)
+                print(f"    ✅ Found {len(new_urls)} new URLs ({len(urls)} total)")
+            else:
+                print(f"    ⚠️ No results found")
+                
+        except Exception as e:
+            print(f"    ❌ Error searching for '{keyword}': {e}")
+            
+        # Add delay between searches (except for the last one)
+        if idx < len(keyword_list) - 1:
+            delay = random.uniform(2.0, 4.0)  # Random delay between 2-4 seconds
+            print(f"    ⏱️ Waiting {delay:.1f} seconds before next search...")
+            time.sleep(delay)
+    
+    # Send completion notification
+    if websocket_manager and session_id:
+        try:
+            send_websocket_notification_sync(
+                websocket_manager=websocket_manager,
+                session_id=session_id,
+                agent_name="data_collector",
+                status="working",
+                progress=0.8,
+                current_task="Sequential search complete",
+                thinking_step=f"Found {len(all_urls)} total competitor products from {len(keyword_list)} keywords"
+            )
+        except Exception:
+            pass
+    
+    print(f"✅ Sequential search complete: {len(all_urls)} unique URLs found")
+    
+    if all_urls:
+        return "\n".join(all_urls)
+    else:
+        return f"No search results found for keywords: {', '.join(keyword_list)}"
+
+
 def product_analysis(product_info: str, session_id: Optional[str] = None) -> str:
     """
     Analyze product current status.
     Input: Main product information (string)
     Returns: Product status analysis result (string)
     """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 product_analysis - Retrieved session_id from context: {session_id}")
+    
     # Send WebSocket notification
     if websocket_manager and session_id:
         try:
@@ -419,6 +631,18 @@ def product_analysis(product_info: str, session_id: Optional[str] = None) -> str
         # Get analysis from LLM
         response = llm.invoke(analysis_prompt)
         
+        # Save product analysis to database
+        analysis_result = f"## Product Analysis\n\n{response.content}"
+        if db_manager and session_id:
+            try:
+                db_manager.update_analysis_session(
+                    session_id=session_id,
+                    product_analysis=analysis_result
+                )
+                print(f"✅ Saved product analysis to database for session: {session_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to save product analysis to database: {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -428,13 +652,13 @@ def product_analysis(product_info: str, session_id: Optional[str] = None) -> str
                     agent_name="market_analyzer",
                     status="working",
                     progress=0.4,
-                    current_task="Product analysis complete",
+                    current_task="Product analysis complete and saved",
                     thinking_step="Generated comprehensive product status analysis"
                 )
             except Exception:
                 pass
         
-        return f"## Product Analysis\n\n{response.content}"
+        return analysis_result
 
     except Exception as e:
         # Send error notification
@@ -460,6 +684,11 @@ def competitor_analysis(main_product_info: str, competitor_infos: str, session_i
     Input: Main product info and multiple competitor infos (strings)
     Returns: Competitor analysis result (string)
     """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 competitor_analysis - Retrieved session_id from context: {session_id}")
+    
     # Debug logging
     print(f"🔍 competitor_analysis called")
     
@@ -489,6 +718,18 @@ def competitor_analysis(main_product_info: str, competitor_infos: str, session_i
         # Get analysis from LLM
         response = llm.invoke(analysis_prompt)
         
+        # Save competitor analysis to database
+        analysis_result = f"## Competitor Analysis\n\n{response.content}"
+        if db_manager and session_id:
+            try:
+                db_manager.update_analysis_session(
+                    session_id=session_id,
+                    competitor_analysis=analysis_result
+                )
+                print(f"✅ Saved competitor analysis to database for session: {session_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to save competitor analysis to database: {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -498,13 +739,13 @@ def competitor_analysis(main_product_info: str, competitor_infos: str, session_i
                     agent_name="market_analyzer",
                     status="working",
                     progress=0.8,
-                    current_task="Competitor analysis complete",
+                    current_task="Competitor analysis complete and saved",
                     thinking_step="Generated detailed competitive positioning analysis"
                 )
             except Exception:
                 pass
         
-        return f"## Competitor Analysis\n\n{response.content}"
+        return analysis_result
 
     except Exception as e:
         # Send error notification
@@ -530,6 +771,11 @@ def market_positioning(product_analysis_result: str, competitor_analysis_result:
     Input: Product status analysis and competitor analysis results
     Returns: Market positioning suggestions (string)
     """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 market_positioning - Retrieved session_id from context: {session_id}")
+    
     # Send WebSocket notification
     if websocket_manager and session_id:
         try:
@@ -553,6 +799,18 @@ def market_positioning(product_analysis_result: str, competitor_analysis_result:
         # Get positioning strategy from LLM
         response = llm.invoke(positioning_prompt)
         
+        # Save market positioning to database
+        positioning_result = response.content
+        if db_manager and session_id:
+            try:
+                db_manager.update_analysis_session(
+                    session_id=session_id,
+                    market_positioning=positioning_result
+                )
+                print(f"✅ Saved market positioning to database for session: {session_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to save market positioning to database: {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -562,13 +820,13 @@ def market_positioning(product_analysis_result: str, competitor_analysis_result:
                     agent_name="market_analyzer",
                     status="completed",
                     progress=1.0,
-                    current_task="Market positioning complete",
+                    current_task="Market positioning complete and saved",
                     thinking_step="Successfully generated positioning strategy recommendations"
                 )
             except Exception:
                 pass
         
-        return response.content
+        return positioning_result
 
     except Exception as e:
         # Send error notification
@@ -594,6 +852,11 @@ def product_optimizer(main_product_info: str, market_positioning_suggestions: st
     Input: Main product info and market positioning suggestions
     Returns: Product optimization strategy (string)
     """
+    # Get session_id from context if not provided
+    if session_id is None:
+        session_id = get_session_id()
+        print(f"📍 product_optimizer - Retrieved session_id from context: {session_id}")
+    
     # Debug logging
     print(f"🔍 product_optimizer called with:")
     print(f"   - main_product_info length: {len(main_product_info) if main_product_info else 0}")
@@ -625,6 +888,18 @@ def product_optimizer(main_product_info: str, market_positioning_suggestions: st
         # Get optimization strategy from LLM
         response = llm.invoke(optimization_prompt)
         
+        # Save optimization strategy to database
+        optimization_result = response.content
+        if db_manager and session_id:
+            try:
+                db_manager.update_analysis_session(
+                    session_id=session_id,
+                    optimization_strategy=optimization_result
+                )
+                print(f"✅ Saved optimization strategy to database for session: {session_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to save optimization strategy to database: {e}")
+        
         # Send completion notification
         if websocket_manager and session_id:
             try:
@@ -634,13 +909,13 @@ def product_optimizer(main_product_info: str, market_positioning_suggestions: st
                     agent_name="optimization_advisor",
                     status="completed",
                     progress=1.0,
-                    current_task="Optimization strategy complete",
+                    current_task="Optimization strategy complete and saved",
                     thinking_step="Successfully generated comprehensive optimization recommendations"
                 )
             except Exception:
                 pass
         
-        return response.content
+        return optimization_result
 
     except Exception as e:
         # Send error notification

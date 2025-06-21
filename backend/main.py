@@ -16,10 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from contextlib import asynccontextmanager
 
-# Import our agents
+# Import our agents and services
 from agents.supervisor import analyze_product
 from services.websocket_manager import websocket_manager
-from models.database import init_db
+from services.redis_manager import redis_manager, init_redis, cleanup_redis
+from models.database import init_db, db_manager
 from models.analysis import AnalysisRequest, AnalysisResponse, AnalysisStatus
 
 
@@ -32,6 +33,9 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_db()
     
+    # Initialize Redis
+    await init_redis()
+    
     # Initialize WebSocket manager
     websocket_manager.initialize()
     
@@ -42,6 +46,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("🔄 Shutting down Amazon Product Analysis System...")
     await websocket_manager.cleanup()
+    await cleanup_redis()
     print("✅ Shutdown complete!")
 
 
@@ -64,9 +69,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for analysis results (in production, use Redis/Database)
-analysis_results: Dict[str, Dict[str, Any]] = {}
-analysis_status: Dict[str, str] = {}
+# Note: Using Redis + PostgreSQL for persistent storage instead of in-memory dictionaries
 
 
 @app.get("/")
@@ -75,13 +78,17 @@ async def root():
     return {
         "message": "Amazon Product Analysis System API",
         "version": "1.0.0",
+        "storage": "Redis + PostgreSQL",
         "docs": "/docs",
         "health": "/health",
         "endpoints": {
             "analyze": "POST /api/analyze",
             "status": "GET /api/analysis/{session_id}/status",
             "result": "GET /api/analysis/{session_id}/result",
-            "websocket": "WS /ws/{session_id}"
+            "detailed_result": "GET /api/analysis/{session_id}/detailed",
+            "websocket": "WS /ws/{session_id}",
+            "sessions": "GET /api/sessions",
+            "database_sessions": "GET /api/database/sessions"
         }
     }
 
@@ -89,10 +96,24 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    # Check Redis connection
+    redis_status = "connected" if redis_manager.connected else "disconnected"
+    
+    # Check PostgreSQL connection (simple test)
+    db_status = "connected"
+    try:
+        test_session = db_manager.get_analysis_session("health_check_test")
+        # If no exception, database is accessible
+    except Exception:
+        db_status = "disconnected"
+    
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "service": "Amazon Product Analysis System"
+        "service": "Amazon Product Analysis System",
+        "redis_status": redis_status,
+        "database_status": db_status,
+        "storage": "Redis + PostgreSQL"
     }
 
 
@@ -120,9 +141,8 @@ async def analyze_amazon_product(
             detail="Invalid Amazon URL. Please provide a valid Amazon product URL."
         )
     
-    # Initialize analysis status
-    analysis_status[session_id] = "started"
-    analysis_results[session_id] = {
+    # Initialize analysis status in Redis and PostgreSQL
+    session_data = {
         "session_id": session_id,
         "amazon_url": url_str,
         "status": "started",
@@ -131,6 +151,13 @@ async def analyze_amazon_product(
         "result": None,
         "error": None
     }
+    
+    # Save to Redis (fast access)
+    await redis_manager.set_analysis_status(session_id, "started")
+    await redis_manager.save_session(session_id, session_data)
+    
+    # Save to PostgreSQL (persistent storage)
+    db_manager.save_analysis_session(session_id, url_str, "started")
     
     # Start analysis in background
     background_tasks.add_task(run_analysis_workflow, session_id, url_str)
@@ -151,9 +178,10 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
         # Small delay to allow WebSocket connection to establish
         await asyncio.sleep(0.5)
         
-        # Update status
-        analysis_status[session_id] = "running"
-        analysis_results[session_id]["status"] = "running"
+        # Update status in Redis and PostgreSQL
+        await redis_manager.set_analysis_status(session_id, "running")
+        await redis_manager.update_session(session_id, {"status": "running"})
+        db_manager.update_analysis_session(session_id, status="running")
         
         # Send initial WebSocket notification
         await websocket_manager.send_agent_progress(
@@ -195,12 +223,25 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
         
         if result.get("success"):
             # Analysis completed successfully
-            analysis_status[session_id] = "completed"
-            analysis_results[session_id].update({
+            completion_time = datetime.now().isoformat()
+            
+            # Update Redis
+            await redis_manager.set_analysis_status(session_id, "completed")
+            await redis_manager.update_session(session_id, {
                 "status": "completed",
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": completion_time,
                 "result": result
             })
+            await redis_manager.save_analysis_result(session_id, result)
+            
+            # Update PostgreSQL
+            db_manager.update_analysis_session(
+                session_id, 
+                status="completed",
+                completed_at=datetime.fromisoformat(completion_time),
+                product_analysis=result.get("market_analysis"),
+                optimization_strategy=result.get("optimization_results")
+            )
             
             # Send completion notification
             await websocket_manager.send_agent_progress(
@@ -216,12 +257,23 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
         else:
             # Analysis failed
             error_msg = result.get("error", "Unknown error occurred")
-            analysis_status[session_id] = "failed"
-            analysis_results[session_id].update({
+            completion_time = datetime.now().isoformat()
+            
+            # Update Redis
+            await redis_manager.set_analysis_status(session_id, "failed")
+            await redis_manager.update_session(session_id, {
                 "status": "failed",
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": completion_time,
                 "error": error_msg
             })
+            
+            # Update PostgreSQL
+            db_manager.update_analysis_session(
+                session_id,
+                status="failed",
+                completed_at=datetime.fromisoformat(completion_time),
+                error_message=error_msg
+            )
             
             # Send error notification
             await websocket_manager.send_agent_progress(
@@ -236,12 +288,23 @@ async def run_analysis_workflow(session_id: str, amazon_url: str):
     except Exception as e:
         # Handle unexpected errors
         error_msg = f"Workflow execution error: {str(e)}"
-        analysis_status[session_id] = "failed"
-        analysis_results[session_id].update({
+        completion_time = datetime.now().isoformat()
+        
+        # Update Redis
+        await redis_manager.set_analysis_status(session_id, "failed")
+        await redis_manager.update_session(session_id, {
             "status": "failed",
-            "completed_at": datetime.now().isoformat(),
+            "completed_at": completion_time,
             "error": error_msg
         })
+        
+        # Update PostgreSQL
+        db_manager.update_analysis_session(
+            session_id,
+            status="failed",
+            completed_at=datetime.fromisoformat(completion_time),
+            error_message=error_msg
+        )
         
         # Send error notification
         await websocket_manager.send_agent_progress(
@@ -259,13 +322,33 @@ async def get_analysis_status(session_id: str):
     """
     Get the current status of an analysis session
     """
-    if session_id not in analysis_status:
-        raise HTTPException(status_code=404, detail="Analysis session not found")
+    # Try Redis first (fast)
+    status = await redis_manager.get_analysis_status(session_id)
+    session_data = await redis_manager.get_session(session_id)
+    
+    # Fallback to PostgreSQL if not in Redis
+    if not status or not session_data:
+        db_session = db_manager.get_analysis_session(session_id)
+        if db_session:
+            status = db_session.status
+            session_data = {
+                "session_id": db_session.session_id,
+                "amazon_url": db_session.amazon_url,
+                "status": db_session.status,
+                "started_at": db_session.started_at.isoformat() if db_session.started_at else None,
+                "completed_at": db_session.completed_at.isoformat() if db_session.completed_at else None,
+                "error": db_session.error_message
+            }
+            # Cache in Redis for next time
+            await redis_manager.set_analysis_status(session_id, status)
+            await redis_manager.save_session(session_id, session_data)
+        else:
+            raise HTTPException(status_code=404, detail="Analysis session not found")
     
     return {
         "session_id": session_id,
-        "status": analysis_status[session_id],
-        "details": analysis_results.get(session_id, {})
+        "status": status,
+        "details": session_data
     }
 
 
@@ -274,27 +357,59 @@ async def get_analysis_result(session_id: str):
     """
     Get the complete analysis result for a session
     """
-    if session_id not in analysis_results:
-        raise HTTPException(status_code=404, detail="Analysis session not found")
+    # Try Redis first (fast)
+    result_data = await redis_manager.get_analysis_result(session_id)
+    session_data = await redis_manager.get_session(session_id)
     
-    result_data = analysis_results[session_id]
+    # Fallback to PostgreSQL if not in Redis
+    if not result_data or not session_data:
+        db_session = db_manager.get_analysis_session(session_id)
+        if db_session:
+            session_data = {
+                "session_id": db_session.session_id,
+                "amazon_url": db_session.amazon_url,
+                "status": db_session.status,
+                "started_at": db_session.started_at.isoformat() if db_session.started_at else None,
+                "completed_at": db_session.completed_at.isoformat() if db_session.completed_at else None,
+                "error": db_session.error_message
+            }
+            
+            # Try to get result from database analysis fields
+            if db_session.status == "completed":
+                result_data = {
+                    "success": True,
+                    "market_analysis": db_session.product_analysis,
+                    "optimization_results": db_session.optimization_strategy,
+                    "session_id": session_id
+                }
+                # Cache in Redis for next time
+                await redis_manager.save_analysis_result(session_id, result_data)
+                await redis_manager.save_session(session_id, session_data)
+        else:
+            raise HTTPException(status_code=404, detail="Analysis session not found")
     
-    if result_data["status"] == "running":
+    status = session_data.get("status", "unknown")
+    
+    if status == "running":
         return {
             "session_id": session_id,
             "status": "running",
             "message": "Analysis still in progress. Please wait or use WebSocket for real-time updates."
         }
-    elif result_data["status"] == "failed":
+    elif status == "failed":
         return {
             "session_id": session_id,
             "status": "failed",
-            "error": result_data.get("error"),
-            "started_at": result_data.get("started_at"),
-            "completed_at": result_data.get("completed_at")
+            "error": session_data.get("error"),
+            "started_at": session_data.get("started_at"),
+            "completed_at": session_data.get("completed_at")
         }
     else:
-        return result_data
+        # Return complete result
+        return {
+            **session_data,
+            "result": result_data
+        }
 
 
 @app.websocket("/ws/{session_id}")
@@ -338,22 +453,128 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         await websocket_manager.disconnect(session_id)
 
 
+@app.get("/api/analysis/{session_id}/detailed")
+async def get_detailed_analysis_result(session_id: str):
+    """
+    Get comprehensive analysis result with all database data including products and analysis details
+    """
+    # Get session from database
+    db_session = db_manager.get_analysis_session(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Analysis session not found")
+    
+    # Get all products for this session
+    products = db_manager.get_session_products(session_id)
+    
+    # Separate main product and competitors
+    main_product = None
+    competitors = []
+    
+    for product in products:
+        product_data = {
+            "asin": product.asin,
+            "url": product.url,
+            "title": product.title,
+            "brand": product.brand,
+            "price": product.price,
+            "currency": product.currency,
+            "description": product.description,
+            "color": product.color,
+            "specifications": product.specifications,
+            "reviews": product.reviews,
+            "rating": product.rating,
+            "review_count": product.review_count,
+            "scraped_at": product.scraped_at.isoformat() if product.scraped_at else None,
+            "scrape_success": product.scrape_success
+        }
+        
+        if product.is_main_product:
+            main_product = product_data
+        elif product.is_competitor:
+            competitors.append(product_data)
+    
+    return {
+        "session_id": session_id,
+        "amazon_url": db_session.amazon_url,
+        "status": db_session.status,
+        "started_at": db_session.started_at.isoformat() if db_session.started_at else None,
+        "completed_at": db_session.completed_at.isoformat() if db_session.completed_at else None,
+        "error_message": db_session.error_message,
+        
+        # Product data
+        "main_product": main_product,
+        "competitors": competitors,
+        "total_products_found": len(products),
+        
+        # Analysis results
+        "product_analysis": db_session.product_analysis,
+        "competitor_analysis": db_session.competitor_analysis,
+        "market_positioning": db_session.market_positioning,
+        "optimization_strategy": db_session.optimization_strategy,
+        
+        # Metadata
+        "created_at": db_session.created_at.isoformat() if db_session.created_at else None,
+        "updated_at": db_session.updated_at.isoformat() if db_session.updated_at else None
+    }
+
+
 @app.get("/api/sessions")
 async def list_active_sessions():
     """
     List all active analysis sessions (for debugging/monitoring)
     """
+    # Get active WebSocket sessions from Redis
+    websocket_sessions = await redis_manager.get_websocket_sessions()
+    
+    # Also get Redis stats for monitoring
+    redis_stats = await redis_manager.get_stats()
+    
     return {
-        "active_sessions": list(analysis_status.keys()),
-        "session_details": {
-            session_id: {
-                "status": status,
-                "started_at": analysis_results.get(session_id, {}).get("started_at"),
-                "url": analysis_results.get(session_id, {}).get("amazon_url")
-            }
-            for session_id, status in analysis_status.items()
-        }
+        "active_websocket_sessions": websocket_sessions,
+        "redis_stats": redis_stats,
+        "message": "Session data now persisted in Redis + PostgreSQL"
     }
+
+
+@app.get("/api/database/sessions")
+async def list_database_sessions():
+    """
+    List all analysis sessions from the database
+    """
+    try:
+        from models.database import SessionLocal, AnalysisSession
+        db = SessionLocal()
+        
+        # Get recent sessions (last 50)
+        sessions = db.query(AnalysisSession).order_by(
+            AnalysisSession.created_at.desc()
+        ).limit(50).all()
+        
+        session_list = []
+        for session in sessions:
+            session_list.append({
+                "session_id": session.session_id,
+                "amazon_url": session.amazon_url,
+                "status": session.status,
+                "started_at": session.started_at.isoformat() if session.started_at else None,
+                "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+                "has_product_analysis": bool(session.product_analysis),
+                "has_competitor_analysis": bool(session.competitor_analysis),
+                "has_market_positioning": bool(session.market_positioning),
+                "has_optimization_strategy": bool(session.optimization_strategy),
+                "error_message": session.error_message,
+                "created_at": session.created_at.isoformat() if session.created_at else None
+            })
+        
+        db.close()
+        
+        return {
+            "total_sessions": len(session_list),
+            "sessions": session_list
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 if __name__ == "__main__":
