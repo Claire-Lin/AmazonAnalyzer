@@ -121,6 +121,22 @@ class AmazonAnalysisSupervisor:
                         collected_data = msg.content
             
             if collected_data:
+                # Send completion notification for data collector agent specifically
+                if websocket_manager and session_id:
+                    try:
+                        send_websocket_notification_sync(
+                            websocket_manager=websocket_manager,
+                            session_id=session_id,
+                            agent_name="data_collector",
+                            status="completed",
+                            progress=1.0,
+                            current_task="Data collection complete and saved",
+                            thinking_step="Successfully collected main product and competitor data"
+                        )
+                    except Exception as e:
+                        print(f"WebSocket notification failed: {e}")
+                
+                # Send supervisor progress notification
                 self._send_notification(
                     session_id=session_id,
                     status="working",

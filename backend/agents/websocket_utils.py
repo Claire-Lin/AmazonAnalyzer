@@ -64,6 +64,7 @@ def send_websocket_notification_sync(
         # Always use a separate thread to avoid any event loop conflicts
         thread = threading.Thread(target=_run_async_in_thread, daemon=True)
         thread.start()
-        # Fire and forget - don't wait for completion
+        # Wait briefly to ensure message is sent before continuing to prevent race conditions
+        thread.join(timeout=0.5)  # Wait up to 500ms for notification to complete
     except Exception as e:
         print(f"Failed to create WebSocket notification thread: {e}")

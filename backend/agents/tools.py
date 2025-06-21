@@ -18,9 +18,7 @@ except ImportError:
 
 # Load environment variables from project root
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-print(f"Loading .env from: {env_path}")
 load_dotenv(env_path)
-print(f"OPENAI_API_KEY loaded: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No'}")
 
 # Add the utils directory to the path so we can import utilities
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))

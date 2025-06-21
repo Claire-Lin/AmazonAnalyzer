@@ -28,6 +28,9 @@ class WebSocketManager:
         # Message buffer for messages sent before connection: session_id -> List[messages]
         self.message_buffer: Dict[str, List[Dict[str, Any]]] = {}
         
+        # Message sending locks to prevent JSON concatenation
+        self.send_locks: Dict[str, asyncio.Lock] = {}
+        
     def initialize(self):
         """Initialize the WebSocket manager"""
         print("🌐 WebSocket Manager initialized")
@@ -49,8 +52,9 @@ class WebSocketManager:
             print(f"📨 Sending {len(self.message_buffer[session_id])} buffered messages for session: {session_id}")
             for message in self.message_buffer[session_id]:
                 try:
-                    await websocket.send_text(json.dumps(message))
-                    await asyncio.sleep(0.01)  # Small delay to prevent overwhelming the client
+                    # Use the improved send_message method for buffered messages too
+                    await self.send_message(session_id, message)
+                    await asyncio.sleep(0.1)  # Increased delay to prevent JSON concatenation
                 except Exception as e:
                     print(f"Error sending buffered message: {e}")
             # Clear the buffer after sending
@@ -65,6 +69,8 @@ class WebSocketManager:
             del self.active_connections[session_id]
         if session_id in self.connection_metadata:
             del self.connection_metadata[session_id]
+        if session_id in self.send_locks:
+            del self.send_locks[session_id]
         
         # Only log if there was actually a connection to disconnect
         if was_connected:
@@ -72,28 +78,48 @@ class WebSocketManager:
         
     async def send_message(self, session_id: str, message: Dict[str, Any]):
         """
-        Send a message to a specific session
+        Send a message to a specific session with proper serialization to prevent JSON concatenation
         """
-        if session_id in self.active_connections:
-            websocket = self.active_connections[session_id]
-            try:
-                await websocket.send_text(json.dumps(message))
-                
-                # Update last activity
-                if session_id in self.connection_metadata:
-                    self.connection_metadata[session_id]["last_activity"] = datetime.now().isoformat()
+        # Ensure we have a lock for this session
+        if session_id not in self.send_locks:
+            self.send_locks[session_id] = asyncio.Lock()
+        
+        # Use lock to prevent concurrent message sending that could cause JSON concatenation
+        async with self.send_locks[session_id]:
+            if session_id in self.active_connections:
+                websocket = self.active_connections[session_id]
+                try:
+                    # Validate and clean the message before sending
+                    json_message = json.dumps(message, ensure_ascii=False, separators=(',', ':'))
                     
-            except WebSocketDisconnect:
-                await self.disconnect(session_id)
-            except Exception as e:
-                print(f"Error sending WebSocket message to {session_id}: {e}")
-                await self.disconnect(session_id)
-        else:
-            # No active connection, buffer the message
-            if session_id not in self.message_buffer:
-                self.message_buffer[session_id] = []
-            self.message_buffer[session_id].append(message)
-            print(f"📥 Buffered message for disconnected session {session_id} (total buffered: {len(self.message_buffer[session_id])})")
+                    # Add debugging for malformed JSON
+                    try:
+                        json.loads(json_message)  # Validate JSON
+                    except json.JSONDecodeError as e:
+                        print(f"❌ Invalid JSON being sent: {e}")
+                        print(f"   Message: {json_message[:200]}...")
+                        return
+                    
+                    await websocket.send_text(json_message)
+                    
+                    # Debug logging for message tracking
+                    print(f"📤 Sent WebSocket message to {session_id}: {message.get('type', 'unknown')} ({len(json_message)} chars)")
+                    
+                    # Update last activity
+                    if session_id in self.connection_metadata:
+                        self.connection_metadata[session_id]["last_activity"] = datetime.now().isoformat()
+                        
+                except WebSocketDisconnect:
+                    await self.disconnect(session_id)
+                except Exception as e:
+                    print(f"Error sending WebSocket message to {session_id}: {e}")
+                    await self.disconnect(session_id)
+            else:
+                # No active connection, buffer the message
+                if session_id not in self.message_buffer:
+                    self.message_buffer[session_id] = []
+                self.message_buffer[session_id].append(message)
+                print(f"📥 Buffered message for disconnected session {session_id} (total buffered: {len(self.message_buffer[session_id])})")
         
     async def broadcast_message(self, message: Dict[str, Any]):
         """

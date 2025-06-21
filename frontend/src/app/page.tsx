@@ -50,47 +50,80 @@ export default function Home() {
       
       ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data)
-          console.log('WebSocket message received:', message)
-          console.log('Message type:', message.type)
-          console.log('Message data:', message.data)
+          // Handle potentially concatenated JSON messages
+          const rawData = event.data
+          console.log('Raw WebSocket data:', rawData)
           
-          switch (message.type) {
-            case 'agent_progress':
-              const rawData = message.data
-              // Transform snake_case fields from backend to camelCase for frontend
-              const progressData = {
-                agentName: rawData.agent_name || rawData.agentName,
-                status: rawData.status,
-                progress: rawData.progress,
-                currentTask: rawData.current_task || rawData.currentTask,
-                thinkingStep: rawData.thinking_step || rawData.thinkingStep,
-                errorMessage: rawData.error_message || rawData.errorMessage,
-                result: rawData.result,
-                timestamp: rawData.timestamp || new Date().toISOString()
+          // Split on '}{'  to handle concatenated JSON
+          const jsonStrings = rawData.split('}{')
+          
+          // Fix the split JSON strings
+          const messages = jsonStrings.map((jsonStr: string, index: number) => {
+            if (index === 0 && jsonStrings.length > 1) {
+              // First message, add closing brace
+              return jsonStr + '}'
+            } else if (index === jsonStrings.length - 1 && jsonStrings.length > 1) {
+              // Last message, add opening brace
+              return '{' + jsonStr
+            } else if (jsonStrings.length > 1) {
+              // Middle message, add both braces
+              return '{' + jsonStr + '}'
+            } else {
+              // Single message, no modification needed
+              return jsonStr
+            }
+          })
+          
+          // Process each message
+          messages.forEach((jsonStr: string) => {
+            try {
+              const message = JSON.parse(jsonStr)
+              console.log('WebSocket message received:', message)
+              console.log('Message type:', message.type)
+              console.log('Message data:', message.data)
+              
+              switch (message.type) {
+                case 'agent_progress':
+                  const rawData = message.data
+                  // Transform snake_case fields from backend to camelCase for frontend
+                  const progressData = {
+                    agentName: rawData.agent_name || rawData.agentName,
+                    status: rawData.status,
+                    progress: rawData.progress,
+                    currentTask: rawData.current_task || rawData.currentTask,
+                    thinkingStep: rawData.thinking_step || rawData.thinkingStep,
+                    errorMessage: rawData.error_message || rawData.errorMessage,
+                    result: rawData.result,
+                    timestamp: rawData.timestamp || new Date().toISOString()
+                  }
+                  // Add new progress message to the history (accumulate all messages)
+                  setAgentProgress(prev => [...prev, progressData])
+                  setCurrentAgent(progressData.agentName)
+                  break
+                  
+                case 'analysis_complete':
+                  setAnalysisSession(prev => prev ? {
+                    ...prev,
+                    status: 'completed',
+                    completedAt: new Date().toISOString(),
+                    result: message.data.result
+                  } : null)
+                  setIsAnalyzing(false)
+                  break
+                  
+                case 'error':
+                  setError(message.data.errorMessage || 'An error occurred')
+                  setIsAnalyzing(false)
+                  break
               }
-              // Add new progress message to the history (accumulate all messages)
-              setAgentProgress(prev => [...prev, progressData])
-              setCurrentAgent(progressData.agentName)
-              break
-              
-            case 'analysis_complete':
-              setAnalysisSession(prev => prev ? {
-                ...prev,
-                status: 'completed',
-                completedAt: new Date().toISOString(),
-                result: message.data.result
-              } : null)
-              setIsAnalyzing(false)
-              break
-              
-            case 'error':
-              setError(message.data.errorMessage || 'An error occurred')
-              setIsAnalyzing(false)
-              break
-          }
+            } catch (e) {
+              console.error('Error parsing individual WebSocket message:', e)
+              console.error('Problematic JSON string:', jsonStr)
+            }
+          })
         } catch (e) {
           console.error('Error parsing WebSocket message:', e)
+          console.error('Raw message data:', event.data)
         }
       }
       
